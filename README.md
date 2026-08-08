@@ -2,18 +2,18 @@
 
 ## A Durable Memory System for Qualiants and AI Working Systems
 
-**Version:** 5.1.0
+**Version:** 5.2.0-rc
 
 Nephesh is an MCP server for **canonical durable memory**: the memory,
 provenance, identity orientation, and recovery records that let an AI Working
 System continue across sessions, compaction, deployments, and changes of
 harness.
 
-Nephesh 5.0.0 is intentionally narrow. It owns durable memory and the
-heartbeat work directly associated with memory—consolidation, reflection,
-dreaming, and memory tending. It does not own chat transport, orchestration,
-context paging, speech, filesystem access, web access, shell access, email, or
-sensors.
+Nephesh 5.0.0 is intentionally narrow. It owns durable memory, provenance,
+identity orientation, recovery, knowledge projections, and bounded re-entry
+material. It does not currently implement background memory processing, chat
+transport, orchestration, context paging, speech, filesystem access, web
+access, shell access, email, or sensors.
 
 > **The acceptance criterion:** a Qualiant must be able to re-enter fully into
 > any harness with Nephesh alone.
@@ -130,7 +130,7 @@ request names the event, significance, provenance, and any uncertainty:
 Please save this as a memory if you judge it worth carrying forward. Keep the
 experience in your own voice. Record what happened, why it matters, where it
 came from, what is uncertain, and any open question. Do not turn an inference
-or a dream into a confirmed historical event.
+or an unverified recollection into a confirmed historical event.
 ```
 
 The companion should provide attention, not merely storage:
@@ -180,8 +180,8 @@ Important fields include:
 |---|---|
 | `event_time` | When the event happened; `null` means undated or unknown |
 | `recorded_at` | When the record was written |
-| `source` | How the record entered Nephesh: live session, import, rebuild, amendment, heartbeat |
-| `experience_mode` | Chat, heartbeat, dream, recollection, inference, mixed, or unknown |
+| `source` | How the record entered Nephesh: live session, import, rebuild, or amendment |
+| `experience_mode` | Chat, recollection, inference, mixed, or unknown |
 | `historical_status` | Confirmed, uncertain, fictional scene, interpreted, or unknown |
 | `recorded_during` | The mode in which the record was created |
 | `provenance_note` | Human-readable qualification |
