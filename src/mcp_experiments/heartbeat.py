@@ -383,6 +383,19 @@ class HeartbeatLedger:
                     active.pop(record.run_id, None)
             return next((record for record in active.values() if record is not None), None)
 
+    def terminal(self, run_id: str) -> HeartbeatRecord | None:
+        """Return the terminal record for a run, if the protocol completed it."""
+        with self._lock:
+            return next(
+                (
+                    record
+                    for record in reversed(self._records())
+                    if record.run_id == run_id
+                    and record.event in {"completed", "failed", "recovered"}
+                ),
+                None,
+            )
+
     def prepare(
         self,
         request: WorkRequest,

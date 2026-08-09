@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import Any
 
 from mcp_experiments.config import settings
+from mcp_experiments.heartbeat import HeartbeatLedger
 from mcp_experiments.schedule import ScheduleStore, ScheduleSupervisor
+from mcp_experiments.tools import dreaming, memory
 
 
 def operation_prompt(claim: dict[str, Any], qualiant_id: str) -> str:
@@ -76,7 +78,43 @@ class HarnessRunner:
                 "status": "failed",
                 "reason": stderr.decode("utf-8", errors="replace")[-4000:] or "harness failed",
             }
-        return {"status": "completed", "output_bytes": len(stdout)}
+        return await self._reconcile_protocol(claim, output_bytes=len(stdout))
+
+    async def _reconcile_protocol(self, claim: dict[str, Any], *, output_bytes: int) -> dict[str, Any]:
+        """Require a terminal Nephesh protocol record before green status."""
+        run_id = str(claim["operation_id"])
+        operation = str(claim.get("operation"))
+        ledger = HeartbeatLedger(settings.heartbeat_ledger_file)
+        active = ledger.active(settings.qualiant_id)
+        if active is not None and active.run_id == run_id:
+            if operation == "dreaming":
+                recovery = await dreaming.memory_dream_recover(
+                    run_id, run_id, settings.qualiant_id, "harness exited before terminal dream phase"
+                )
+            else:
+                recovery = await memory.memory_heartbeat_recover(
+                    run_id, run_id, settings.qualiant_id, "harness exited before terminal heartbeat outcome"
+                )
+            return {
+                "status": "failed",
+                "reason": "harness exited with an active prepared Nephesh run",
+                "recovery": recovery,
+                "output_bytes": output_bytes,
+            }
+        terminal = ledger.terminal(run_id)
+        if terminal is None:
+            return {
+                "status": "failed",
+                "reason": "harness exited without a terminal Nephesh protocol record",
+                "output_bytes": output_bytes,
+            }
+        if terminal.event != "completed":
+            return {
+                "status": "failed",
+                "reason": f"Nephesh protocol ended as {terminal.event}",
+                "output_bytes": output_bytes,
+            }
+        return {"status": "completed", "output_bytes": output_bytes}
 
 
 async def run_daemon(args: argparse.Namespace) -> None:
