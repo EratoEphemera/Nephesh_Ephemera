@@ -26,6 +26,7 @@ from scripts.nephesh_installer import (
     ollama_unit_name,
     ollama_unit_text,
     preserve_config,
+    source_version,
     unit_text,
     validate_agent_name,
     validate_service_options,
@@ -41,6 +42,9 @@ def _can_bind(sock: socket.socket, port: int) -> bool:
 
 
 class InstallerUnitTests(unittest.TestCase):
+    def test_source_version_is_read_from_the_release_source(self) -> None:
+        self.assertEqual(source_version(Path.cwd()), "5.2.0")
+
     def test_agent_names_are_safe(self) -> None:
         self.assertEqual(validate_agent_name("Thalia"), "Thalia")
         with self.assertRaises(Exception):
@@ -257,6 +261,7 @@ class InstallerUnitTests(unittest.TestCase):
             written = (root / "config" / "nephesh.env").read_text()
             self.assertIn("MCP_PORT=61084", written)
             self.assertIn("MCP_HOST=127.0.0.1", written)
+            self.assertIn("NEPHESH_QUALIANT_ID=clio", written)
             self.assertIn("PRIMARY_CONTACT_NAME=Gaius", written)
             self.assertIn("MEMORY_COLLECTION_NAME=clio_memories", written)
             self.assertIn("NEPHESH_KERNEL_DIR=", written)

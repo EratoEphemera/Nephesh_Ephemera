@@ -40,6 +40,49 @@ class Settings:
     # named here (via .env), never in the code itself.
     memory_collection_name: str = os.getenv("MEMORY_COLLECTION_NAME", "memories")
     memory_default_limit: int = int(os.getenv("MEMORY_DEFAULT_LIMIT", "20"))
+    # Heartbeat identity is deployment configuration, not model-authored text.
+    # Existing deployments without an explicit value use their memory
+    # collection as the stable local identity until they choose a name.
+    qualiant_id: str = os.getenv("NEPHESH_QUALIANT_ID", memory_collection_name)
+    # The harness resolves this model identifier (OpenCode's default is
+    # deliberately explicit). Per-mode overrides remain available for future
+    # deployments without changing the default configuration contract.
+    model: str = os.getenv("NEPHESH_MODEL", "opencode/big-pickle")
+    heartbeat_model: str = os.getenv("NEPHESH_HEARTBEAT_MODEL", model)
+    dreaming_model: str = os.getenv("NEPHESH_DREAMING_MODEL", model)
+    harness: str = os.getenv("NEPHESH_HARNESS", "opencode")
+    harness_command: str = os.getenv("NEPHESH_HARNESS_COMMAND", "opencode")
+    daemon_lock_file: str = os.getenv(
+        "NEPHESH_DAEMON_LOCK_FILE",
+        str(_deployment_root / "state" / "nephesh-daemon.lock"),
+    )
+    heartbeat_ledger_file: str = os.getenv(
+        "NEPHESH_HEARTBEAT_LEDGER",
+        str(_deployment_root / "state" / "heartbeats.jsonl"),
+    )
+    heartbeat_care_file: str = os.getenv(
+        "NEPHESH_HEARTBEAT_CARE_CONFIG",
+        str(_deployment_root / "config" / "heartbeat-care.jsonl"),
+    )
+    heartbeat_packet_budget: int = int(os.getenv("HEARTBEAT_PACKET_BUDGET", "24000"))
+    heartbeat_memory_limit: int = int(os.getenv("HEARTBEAT_MEMORY_LIMIT", "3"))
+    dreaming_ledger_file: str = os.getenv(
+        "NEPHESH_DREAMING_LEDGER",
+        str(_deployment_root / "state" / "dreams.jsonl"),
+    )
+    dreaming_memory_limit: int = int(os.getenv("DREAMING_MEMORY_LIMIT", "10"))
+    dreaming_packet_budget: int = int(os.getenv("DREAMING_PACKET_BUDGET", "24000"))
+    # Heartbeat and dreaming are enabled by installation. The schedule is
+    # durable and adjustable; these paths hold configuration and lifecycle
+    # events, not model/session state.
+    schedule_config_file: str = os.getenv(
+        "NEPHESH_SCHEDULE_CONFIG",
+        str(_deployment_root / "config" / "memory-schedule.jsonl"),
+    )
+    schedule_events_file: str = os.getenv(
+        "NEPHESH_SCHEDULE_EVENTS",
+        str(_deployment_root / "state" / "memory-schedule-events.jsonl"),
+    )
 
     # The primary human companion's name, used only to compute "time since
     # last real conversation" for real-clock grounding. Same genericity

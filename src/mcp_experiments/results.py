@@ -19,6 +19,13 @@ class HealthResult(TypedDict):
     tools_available: list[str]
 
 
+class SystemTimeResult(TypedDict):
+    utc: str
+    unix_seconds: float
+    timezone: str
+    source: str
+
+
 class CollectionListResult(TypedDict):
     collections: list[dict[str, object]]
 
@@ -127,6 +134,115 @@ class MemorySampleResult(TypedDict, total=False):
     memory_count: int
     sampled: int
     sample: str
+    error: str | None
+
+
+class HeartbeatPrepareResult(TypedDict, total=False):
+    status: str | None
+    run_id: str | None
+    idempotency_key: str | None
+    qualiant_id: str | None
+    configuration_revision: int | None
+    packet_version: int | None
+    packet_bytes: int | None
+    packet_digest: str | None
+    packet: str | None
+    truncated: bool | None
+    continuation_available: bool | None
+    identity_and_continuity: str | None
+    recovered_memory_context: str | None
+    heartbeat_instruction: str | None
+    allowed_actions: list[str] | None
+    care_revision: int | None
+    care_profile: dict[str, object] | None
+    model: str | None
+    reason: str | None
+    error: str | None
+
+
+class HeartbeatCompleteResult(TypedDict, total=False):
+    status: str | None
+    run_id: str | None
+    idempotency_key: str | None
+    qualiant_id: str | None
+    outcome: str | None
+    activity: str | None
+    actions_applied: int | None
+    action_results: list[dict[str, object]] | None
+    error: str | None
+
+
+class HeartbeatRecoveryResult(TypedDict, total=False):
+    status: str | None
+    run_id: str | None
+    idempotency_key: str | None
+    qualiant_id: str | None
+    reason: str | None
+    error: str | None
+
+
+class DreamPrepareResult(TypedDict, total=False):
+    status: str | None
+    run_id: str | None
+    idempotency_key: str | None
+    qualiant_id: str | None
+    dream_kind: str | None
+    wall_clock_utc: str | None
+    packet_version: int | None
+    packet_bytes: int | None
+    packet_digest: str | None
+    packet: str | None
+    phase: str | None
+    source_count: int | None
+    model: str | None
+    error: str | None
+
+
+class DreamPhaseResult(TypedDict, total=False):
+    status: str | None
+    run_id: str | None
+    idempotency_key: str | None
+    qualiant_id: str | None
+    phase: str | None
+    artifact_id: str | None
+    artifact_status: str | None
+    grounding_status: str | None
+    error: str | None
+
+
+class DreamPhasePrepareResult(TypedDict, total=False):
+    status: str | None
+    run_id: str | None
+    idempotency_key: str | None
+    qualiant_id: str | None
+    phase: str | None
+    packet_version: int | None
+    packet_bytes: int | None
+    packet_digest: str | None
+    packet: str | None
+    error: str | None
+
+
+class DreamDiaryResult(TypedDict, total=False):
+    status: str | None
+    run_id: str | None
+    diary_id: str | None
+    qualiant_id: str | None
+    visibility: str | None
+    experience_mode: str | None
+    historical_status: str | None
+    generation_status: str | None
+    error: str | None
+
+
+class DreamGroundResult(TypedDict, total=False):
+    status: str | None
+    run_id: str | None
+    artifact_id: str | None
+    qualiant_id: str | None
+    decision: str | None
+    memory_id: str | None
+    grounding_status: str | None
     error: str | None
 
 

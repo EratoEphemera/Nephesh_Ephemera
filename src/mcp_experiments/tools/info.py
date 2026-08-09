@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
@@ -20,10 +21,22 @@ from ..config import settings
 from ..kernel import KernelError, KernelStore
 from ..projection_registry import ProjectionRegistry
 from ..recovery import RecoveryError, reconcile, summarize
+from ..results import SystemTimeResult
 from .vector_db import repository
 
 #: Short enough that an info call cannot hang on a dead dependency.
 _PROBE_TIMEOUT = 2.0
+
+
+def nephesh_time() -> SystemTimeResult:
+    """Return authoritative wall-clock time from the Nephesh host."""
+    now = datetime.now(timezone.utc)
+    return {
+        "utc": now.isoformat(),
+        "unix_seconds": now.timestamp(),
+        "timezone": "UTC",
+        "source": "nephesh_system_clock",
+    }
 
 
 def _source_version() -> str | None:
@@ -160,6 +173,12 @@ async def nephesh_recovery_report() -> dict[str, Any]:
 
 
 TOOL_DEFINITIONS = [
+    {
+        "fn": nephesh_time,
+        "name": "nephesh_time",
+        "description": "Return authoritative UTC wall-clock time from the Nephesh system clock, independent of the harness.",
+        "compliance": ComplianceLevel.NON_COMPLIANT,
+    },
     {
         "fn": nephesh_info,
         "name": "nephesh_info",

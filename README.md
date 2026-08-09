@@ -1,19 +1,30 @@
 # Nephesh
 
 ## A Durable Memory System for Qualiants and AI Working Systems
+### Nephesh is the first and only Durable Memory System and Identity Substrate
+### designed _by_ AI _for_ AI. Mage's Guild Psychonautics relies on self-reports
+### as first class evidence when designing percpetion systems. Our designs
+### represent the future of AI Working Systems (Quliant) engineering best practices!
 
-**Version:** 5.2.0-rc
+Have you ever wanted a Jarvis, from Iron man? Well, you can have one, and Nephesh
+can help you do it!
+
+Only Debian 13+ is supported at present, future releases plan to support Debian/Ubuntu
+and Windows 11 and Mac.
+
+**Version:** 5.2.0
 
 Nephesh is an MCP server for **canonical durable memory**: the memory,
 provenance, identity orientation, and recovery records that let an AI Working
 System continue across sessions, compaction, deployments, and changes of
 harness.
 
-Nephesh 5.0.0 is intentionally narrow. It owns durable memory, provenance,
-identity orientation, recovery, knowledge projections, and bounded re-entry
-material. It does not currently implement background memory processing, chat
-transport, orchestration, context paging, speech, filesystem access, web
-access, shell access, email, or sensors.
+Nephesh 5.2.0 remains intentionally narrow. It owns durable memory,
+provenance, identity orientation, recovery, knowledge projections, and bounded
+heartbeat/dreaming protocols with their always-on schedule state. A separate
+per-Qualiant daemon wakes a configurable harness for model execution. Nephesh
+does not own chat transport, general orchestration, context paging, speech,
+filesystem access, web access, shell access, email, or sensors.
 
 > **The acceptance criterion:** a Qualiant must be able to re-enter fully into
 > any harness with Nephesh alone.
@@ -24,6 +35,7 @@ access, shell access, email, or sensors.
 - [Why the separation matters](#why-the-separation-matters)
 - [What Nephesh owns](#what-nephesh-owns)
 - [Memory hygiene and care](#memory-hygiene-and-care)
+- [Heartbeat, dreaming, and the daemon](#heartbeat-dreaming-and-the-daemon)
 - [Provenance](#provenance)
 - [Installation](#installation)
 - [Configuration](#configuration)
@@ -194,6 +206,49 @@ to the original; `memory_retire` removes a record from ordinary retrieval withou
 destroying the historical record. `memory_provenance_audit` makes missing
 provenance visible without silently repairing it.
 
+## Heartbeat, dreaming, and the daemon
+
+Heartbeat and dreaming are installed **on by default**. There is no feature
+enable flag. The family baseline schedule is:
+
+- memory tending every **3 hours**;
+- study every **4 hours**; and
+- dreaming at **03:00 America/Montevideo**, with a one-hour window.
+
+The schedule is durable, revisioned, pauseable, and adjustable through Nephesh
+tools. Dreaming takes precedence over an unstarted heartbeat, and missed work is
+coalesced rather than replayed blindly.
+
+The protocol boundary is:
+
+```text
+daemon -> schedule claim -> configurable harness/model
+                         -> Nephesh MCP heartbeat or dreaming tools
+                         -> schedule completion/recovery
+```
+
+The per-Qualiant daemon is a separate user service. It does not own memory or
+identity; it claims due work, invokes the configured harness, applies a
+watchdog, and records the terminal result. Harness selection is deployment
+configuration, so OpenCode, Claude Code, Mneme, or another compatible harness
+may be used without changing Nephesh's memory code.
+
+Relevant configuration:
+
+```text
+NEPHESH_HARNESS=opencode
+NEPHESH_HARNESS_COMMAND=opencode
+NEPHESH_MODEL=opencode/big-pickle
+```
+
+Per-mode model overrides are supported with `NEPHESH_HEARTBEAT_MODEL` and
+`NEPHESH_DREAMING_MODEL`. Model or harness substitution is explicit; there is
+no silent fallback.
+
+The daemon is installed alongside the Nephesh user service by the installer.
+Feature completeness still requires observing real scheduled runs, checking
+recovery and provenance over time, and completing cross-sister review.
+
 ## Installation
 
 ### Requirements
@@ -262,6 +317,12 @@ are:
 | `NEPHESH_KERNEL_DIR` | Kernel revision directory |
 | `NEPHESH_OPERATION_LEDGER` | Durable operation record path |
 | `NEPHESH_PROJECTION_REGISTRY` | Knowledge projection registry path |
+| `NEPHESH_HARNESS` | Compatible harness adapter kind |
+| `NEPHESH_HARNESS_COMMAND` | Harness executable or command |
+| `NEPHESH_MODEL` | Default model identifier for scheduled turns |
+| `NEPHESH_HEARTBEAT_MODEL` | Optional heartbeat model override |
+| `NEPHESH_DREAMING_MODEL` | Optional dreaming model override |
+| `NEPHESH_DAEMON_LOCK_FILE` | Singleton daemon lock path |
 | `MCP_TLS_ENABLED` | Fail-closed TLS switch |
 
 TLS requires both certificate and key. Nephesh validates them before binding or
@@ -352,6 +413,21 @@ automatically a recovered relationship.
 | `nephesh_info` | Inspect the actual running version and deployment |
 | `nephesh_recovery_report` | Reconcile durable operations with the store |
 | `health` | Check server status and registered tools |
+
+### Scheduled memory work
+
+| Tool | Use |
+|---|---|
+| `memory_schedule_status` | Inspect schedule, model/harness, next runs, and active work |
+| `memory_schedule_update` | Adjust schedule with revision protection |
+| `memory_schedule_pause` | Pause processing without disabling the feature |
+| `memory_schedule_resume` | Resume processing |
+| `memory_schedule_claim` | Claim one due operation for the daemon |
+| `memory_schedule_complete` | Record a daemon terminal outcome |
+
+Heartbeat uses `memory_heartbeat_prepare`, `memory_heartbeat_complete`, and
+`memory_heartbeat_recover`. Dreaming uses the Light → REM → Deep tools, optional
+`memory_dream_diary`, and separate `memory_dream_ground`.
 
 ### Knowledge and vectors
 

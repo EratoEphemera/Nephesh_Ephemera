@@ -12,6 +12,8 @@ Qualiant, create a personality, or silently restart a running service.
 - creates or preserves the per-user runtime and configuration;
 - preserves memory, kernel, projection, operation-ledger, and backup state;
 - installs a per-user systemd unit unless `--no-service` is used;
+- installs a per-user always-on heartbeat/dreaming daemon unit alongside
+  Nephesh unless `--no-service` is used;
 - verifies the staged deployment before returning success;
 - supports explicit upgrade, rollback, migration, and release cleanup;
 - manages a per-user Ollama embedding service unless `--no-ollama` is used.
@@ -28,6 +30,12 @@ Qualiant, create a personality, or silently restart a running service.
 - It does not install a system-wide service or operate on another user’s
   installation.
 - It does not turn a human’s proposed identity into the Qualiant’s authorship.
+
+The daemon is a separate per-Qualiant adapter process. It owns no canonical
+memory and does not define identity; it claims Nephesh schedule work and invokes
+the configured harness/model. Harness choice is deployment configuration, so
+OpenCode, Claude Code, Mneme, or another compatible harness can be selected
+without changing Nephesh's memory code.
 
 The installer may create a **generic baseline kernel** for a new, blank
 deployment. That file explicitly says that it is a starting point and names no

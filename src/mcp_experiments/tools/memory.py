@@ -18,10 +18,30 @@ from typing import Any
 
 from ..compliance import ComplianceLevel
 from ..config import settings
+from ..heartbeat import (
+    CareProfileStore,
+    DEFAULT_HEARTBEAT_INSTRUCTION,
+    HEARTBEAT_OUTCOMES,
+    HeartbeatLedger,
+    MemoryWorkMode,
+    WorkRequest,
+    packet_digest,
+)
 from ..kernel import KernelError, KernelStore
 from ..projection import guard_memory_target
 from ..persistence import DurableWriteError, OperationState
-from ..results import MemoryAmendResult, MemoryContextResult, MemoryIngestResult, MemoryRecallResult, MemoryRetireResult, MemorySampleResult, ProvenanceAuditResult
+from ..results import (
+    HeartbeatCompleteResult,
+    HeartbeatPrepareResult,
+    HeartbeatRecoveryResult,
+    MemoryAmendResult,
+    MemoryContextResult,
+    MemoryIngestResult,
+    MemoryRecallResult,
+    MemoryRetireResult,
+    MemorySampleResult,
+    ProvenanceAuditResult,
+)
 from .vector_db import repository
 
 MEMORY_TYPES = {
@@ -375,6 +395,7 @@ async def memory_ingest(
     significance: str | None = None,
     open_questions: list[str] | None = None,
     source: str = "live_session",
+    heartbeat_kind: str | None = None,
 ) -> MemoryIngestResult:
     """Store a single memory with rich metadata.
 
@@ -466,6 +487,8 @@ async def memory_ingest(
         "historical_status": historical_status,
         "recorded_during": recorded_during,
     }
+    if heartbeat_kind:
+        metadata["heartbeat_kind"] = heartbeat_kind
     if emotional_tone:
         metadata["emotional_tone"] = emotional_tone
     if participants:
@@ -869,6 +892,440 @@ async def memory_context(
     }
 
 
+def _heartbeat_request(
+    run_id: str,
+    qualiant_id: str,
+    configuration_revision: int,
+) -> WorkRequest:
+    return WorkRequest(
+        run_id=run_id,
+        qualiant_id=qualiant_id,
+        started_at=_now_iso(),
+        configuration_revision=configuration_revision,
+    )
+
+
+def _bound_utf8(text: str, budget: int) -> tuple[str, bool]:
+    if budget <= 0:
+        raise ValueError("heartbeat packet budget must be greater than zero")
+    encoded = text.encode("utf-8")
+    if len(encoded) <= budget:
+        return text, False
+    return encoded[:budget].decode("utf-8", errors="ignore"), True
+
+
+def _heartbeat_context_sections(context: str) -> tuple[str, str]:
+    marker = "## Long-term Memory"
+    if marker in context:
+        identity, memories = context.split(marker, 1)
+        return identity.strip(), f"{marker}{memories}".strip()
+    identity = context.strip() if "## Identity" in context else ""
+    return identity, "No memories are available for recovery. This is normal absence."
+
+
+async def memory_heartbeat_prepare(
+    run_id: str,
+    idempotency_key: str,
+    qualiant_id: str,
+    current_work: str | None = None,
+    prior_run_id: str | None = None,
+    prior_outcome: str | None = None,
+    changes_since_prior: str | None = None,
+    unresolved: str | None = None,
+    configuration_revision: int = 0,
+    memory_limit: int | None = None,
+    packet_budget: int | None = None,
+) -> HeartbeatPrepareResult:
+    """Prepare one identity-bound, read-only memory-tending heartbeat.
+
+    Memory recovery is reference context; the explicit heartbeat instruction is
+    a separate section so the Qualiant is not asked to infer why context was
+    recovered. Scheduling and model execution remain outside Nephesh.
+    """
+    if qualiant_id != settings.qualiant_id:
+        return {
+            "status": "blocked",
+            "qualiant_id": qualiant_id,
+            "reason": "heartbeat identity does not match this Nephesh deployment",
+        }
+    try:
+        request = _heartbeat_request(run_id, qualiant_id, configuration_revision)
+        ledger = HeartbeatLedger(settings.heartbeat_ledger_file)
+        existing = ledger.find_idempotency(idempotency_key)
+        if existing is not None:
+            if existing.qualiant_id != qualiant_id:
+                return {"status": "blocked", "run_id": run_id, "qualiant_id": qualiant_id, "reason": "idempotency key belongs to another Qualiant"}
+            return {
+                "status": "duplicate",
+                "run_id": run_id,
+                "idempotency_key": idempotency_key,
+                "qualiant_id": qualiant_id,
+                "reason": "heartbeat idempotency key has already been used",
+            }
+        active = ledger.active(qualiant_id)
+        if active is not None:
+            return {
+                "status": "deferred",
+                "run_id": run_id,
+                "idempotency_key": idempotency_key,
+                "qualiant_id": qualiant_id,
+                "reason": (
+                    "dreaming takes precedence over heartbeat"
+                    if active.mode is MemoryWorkMode.DREAMING
+                    else "another heartbeat already owns the deployment"
+                ),
+            }
+        context_result = await memory_context(
+            limit=memory_limit if memory_limit is not None else settings.heartbeat_memory_limit,
+        )
+        raw_context = str(context_result.get("context", ""))
+        care = CareProfileStore(settings.heartbeat_care_file).current()
+        identity, memories = _heartbeat_context_sections(raw_context)
+        continuity = identity
+        continuity_lines = [continuity]
+        for label, value in (
+            ("Current work supplied by the harness", current_work),
+            ("Prior heartbeat run", prior_run_id),
+            ("Prior heartbeat outcome", prior_outcome),
+            ("Changes since prior heartbeat", changes_since_prior),
+            ("Unresolved", unresolved),
+        ):
+            if value and value.strip():
+                continuity_lines.append(f"{label}:\n{value.strip()}")
+        continuity = "\n\n".join(continuity_lines).strip()
+        budget = packet_budget if packet_budget is not None else settings.heartbeat_packet_budget
+        prefix = (
+            "Nephesh heartbeat (kind=nephesh_heartbeat)\n"
+            f"Wall-clock time (UTC): {request.started_at}\n\n"
+            "Identity and continuity recovery (reference context only; not a task):\n"
+            f"{continuity or 'No kernel context is available. Do not invent one.'}\n\n"
+            "Recovered memory context (reference context only):\n"
+        )
+        allowed_modes = set(care["profile"].get("allowed_modes", []))
+        allowed_actions = ["leave_thread", "update_care_profile"]
+        if "tend" in allowed_modes:
+            allowed_actions.extend(["ingest_memory", "amend_memory", "retire_memory"])
+        if "study" in allowed_modes:
+            allowed_actions.append("study_memory")
+        if "custom" in allowed_modes:
+            allowed_actions.append("custom_action")
+        care_json = json.dumps(care["profile"], sort_keys=True)
+        custom_instruction = str(care["profile"].get("custom_instruction", "")).strip()
+        custom_block = (
+            "\n\nSelf-authored heartbeat instruction (takes precedence over the default):\n"
+            f"{custom_instruction}"
+            if custom_instruction
+            else ""
+        )
+        suffix = (
+            "\n\nCurrent heartbeat authorization profile (self-authored and versioned):\n"
+            f"{care_json}{custom_block}\n\nHeartbeat purpose:\n{DEFAULT_HEARTBEAT_INSTRUCTION}"
+        )
+        available_memory_bytes = budget - len((prefix + suffix).encode("utf-8"))
+        bounded_memories, truncated = _bound_utf8(memories, available_memory_bytes)
+        bounded_packet = prefix + bounded_memories + suffix
+        record = ledger.prepare(
+            request,
+            idempotency_key=idempotency_key,
+            packet_digest=packet_digest(bounded_packet),
+        )
+        return {
+            "status": "prepared",
+            "run_id": record.run_id,
+            "idempotency_key": record.idempotency_key,
+            "qualiant_id": record.qualiant_id,
+            "configuration_revision": configuration_revision,
+            "packet_version": 1,
+            "packet_bytes": len(bounded_packet.encode("utf-8")),
+            "packet_digest": packet_digest(bounded_packet),
+            "truncated": truncated,
+            # The first protocol slice reports truncation honestly but does
+            # not pretend that a continuation endpoint exists yet.
+            "continuation_available": False,
+            "packet": bounded_packet,
+            "allowed_actions": allowed_actions,
+            "care_revision": care["revision"],
+            "care_profile": care["profile"],
+            "model": settings.heartbeat_model,
+        }
+    except (OSError, RuntimeError, ValueError, KeyError) as exc:
+        return {"status": "failed", "run_id": run_id, "qualiant_id": qualiant_id, "error": str(exc)}
+
+
+async def memory_heartbeat_complete(
+    run_id: str,
+    idempotency_key: str,
+    qualiant_id: str,
+    outcome: str,
+    actions: list[dict[str, Any]] | None = None,
+    activity: str = "tend",
+    reentry_marker: str | None = None,
+    reason: str | None = None,
+    configuration_revision: int = 0,
+) -> HeartbeatCompleteResult:
+    """Commit a Qualiant-authored heartbeat outcome and bounded memory actions."""
+    if qualiant_id != settings.qualiant_id:
+        return {"status": "blocked", "qualiant_id": qualiant_id, "error": "identity mismatch"}
+    if outcome not in HEARTBEAT_OUTCOMES:
+        return {"status": "error", "error": f"invalid heartbeat outcome: {outcome}"}
+    if activity not in {"tend", "study", "custom", "reflect", "rest"}:
+        return {"status": "error", "error": f"invalid heartbeat activity: {activity}"}
+    actions = actions or []
+    care = CareProfileStore(settings.heartbeat_care_file).current()
+    if configuration_revision != care["revision"]:
+        return {
+            "status": "blocked",
+            "qualiant_id": qualiant_id,
+            "error": "heartbeat care configuration revision is stale",
+        }
+    if activity not in care["profile"].get("allowed_modes", []):
+        return {"status": "blocked", "qualiant_id": qualiant_id, "error": "heartbeat activity is not authorized"}
+    if len(actions) > 3:
+        return {"status": "error", "error": "at most three heartbeat actions are allowed"}
+    if len(actions) > int(care["profile"].get("max_memory_actions", 3)):
+        return {"status": "error", "error": "heartbeat action count exceeds care profile"}
+    durable_actions = {
+        action.get("kind")
+        for action in actions
+        if action.get("kind") in {
+            "ingest_memory",
+            "amend_memory",
+            "retire_memory",
+            "study_memory",
+            "update_care_profile",
+        }
+    }
+    if activity == "study" and durable_actions - {"study_memory"}:
+        return {"status": "error", "error": "study activity may only preserve study memories"}
+    if activity == "tend" and "study_memory" in durable_actions:
+        return {"status": "error", "error": "study_memory requires study activity"}
+    if activity == "custom" and any(action.get("kind") != "custom_action" for action in actions):
+        return {"status": "error", "error": "custom activity may only report custom actions"}
+    if activity in {"reflect", "rest"} and actions:
+        return {"status": "error", "error": f"{activity} activity cannot perform actions"}
+    if activity == "study" and outcome not in {
+        "studied",
+        "unavailable",
+        "insufficient_evidence",
+        "no_memories",
+        "no_change",
+    }:
+        return {"status": "error", "error": "study activity has an invalid outcome"}
+    if activity == "custom" and outcome not in {"custom_completed", "unavailable", "failed"}:
+        return {"status": "error", "error": "custom activity has an invalid outcome"}
+    if durable_actions and activity == "tend" and outcome not in {"tended", "needs_attention"}:
+        return {"status": "error", "error": "memory actions require tended or needs_attention outcome"}
+    request = _heartbeat_request(run_id, qualiant_id, configuration_revision)
+    ledger = HeartbeatLedger(settings.heartbeat_ledger_file)
+    existing = ledger.find_idempotency(idempotency_key)
+    if existing is not None and existing.qualiant_id != qualiant_id:
+        return {"status": "blocked", "run_id": run_id, "qualiant_id": qualiant_id, "error": "heartbeat identity does not match prepared run"}
+    if existing is None or existing.event != "prepared" or existing.run_id != run_id:
+        if existing is not None and existing.event in {"completed", "failed", "recovered"}:
+            return {"status": "duplicate", "run_id": run_id, "idempotency_key": idempotency_key}
+        return {"status": "blocked", "run_id": run_id, "error": "heartbeat was not prepared"}
+
+    for action in actions:
+        kind = action.get("kind")
+        if kind == "ingest_memory" and not str(action.get("text", "")).strip():
+            return {"status": "error", "run_id": run_id, "error": "ingest_memory action requires text"}
+        if kind == "update_care_profile" and not isinstance(action.get("profile"), dict):
+            return {"status": "error", "run_id": run_id, "error": "update_care_profile action requires a profile object"}
+        if kind == "leave_thread" and not str(action.get("text", "")).strip():
+            return {"status": "error", "run_id": run_id, "error": "leave_thread action requires text"}
+        if kind in {"amend_memory", "retire_memory"} and not str(action.get("memory_id", "")).strip():
+            return {"status": "error", "run_id": run_id, "error": f"{kind} action requires memory_id"}
+        if kind == "retire_memory" and not str(action.get("reason", "")).strip():
+            return {"status": "error", "run_id": run_id, "error": "retire_memory action requires reason"}
+        if kind == "study_memory" and not str(action.get("text", "")).strip():
+            return {"status": "error", "run_id": run_id, "error": "study_memory action requires text"}
+        if kind == "custom_action" and not str(action.get("summary", "")).strip():
+            return {"status": "error", "run_id": run_id, "error": "custom_action requires summary"}
+        if kind not in {
+            "ingest_memory",
+            "amend_memory",
+            "retire_memory",
+            "study_memory",
+            "update_care_profile",
+            "leave_thread",
+            "custom_action",
+        }:
+            return {"status": "error", "run_id": run_id, "error": "unsupported heartbeat action"}
+
+    action_results: list[dict[str, object]] = []
+    try:
+        for action in actions:
+            if action.get("kind") == "leave_thread":
+                action_results.append({"kind": "leave_thread", "text": str(action["text"]).strip()})
+                continue
+            if action.get("kind") == "custom_action":
+                action_results.append({
+                    "kind": "custom_action",
+                    "name": str(action.get("name", "custom")),
+                    "summary": str(action["summary"]).strip(),
+                    "external": True,
+                })
+                continue
+            if action.get("kind") == "update_care_profile":
+                profile = action.get("profile")
+                if not isinstance(profile, dict):
+                    raise ValueError("update_care_profile action requires a profile object")
+                updated = CareProfileStore(settings.heartbeat_care_file).amend(
+                    profile,
+                    authored_by=qualiant_id,
+                    expected_revision=int(action.get("expected_revision", 0)),
+                )
+                action_results.append({"kind": "update_care_profile", **updated})
+                continue
+            if action.get("kind") == "retire_memory":
+                result = await memory_retire(
+                    memory_id=str(action["memory_id"]),
+                    reason=str(action["reason"]),
+                )
+                if result.get("error"):
+                    raise ValueError(str(result["error"]))
+                action_results.append({"kind": "retire_memory", **result})
+                continue
+            if action.get("kind") == "amend_memory":
+                result = await memory_amend(
+                    memory_id=str(action["memory_id"]),
+                    text=action.get("text"),
+                    memory_type=action.get("memory_type"),
+                    importance=action.get("importance"),
+                    emotional_tone=action.get("emotional_tone"),
+                    significance=action.get("significance"),
+                    open_questions=action.get("open_questions"),
+                    experience_mode="heartbeat",
+                    historical_status=action.get("historical_status"),
+                    recorded_during="heartbeat",
+                    provenance_note=action.get("provenance_note") or reason,
+                    reason=action.get("reason") or "heartbeat-authored amendment",
+                    source="heartbeat",
+                    heartbeat_kind="nephesh_heartbeat",
+                )
+                if result.get("error"):
+                    raise ValueError(str(result["error"]))
+                action_results.append({"kind": "amend_memory", **result})
+                continue
+            if action.get("kind") == "study_memory":
+                source_refs = action.get("source_refs") or []
+                if not isinstance(source_refs, list):
+                    raise ValueError("study_memory source_refs must be a list")
+                study_note = str(action["text"]).strip()
+                provenance = (
+                    f"study_sources={json.dumps(source_refs, sort_keys=True)}; "
+                    f"{action.get('provenance_note') or reason or 'heartbeat study'}"
+                )
+                result = await memory_ingest(
+                    text=study_note,
+                    memory_type=str(action.get("memory_type", "reflection")),
+                    importance=int(action.get("importance", 3)),
+                    emotional_tone=action.get("emotional_tone"),
+                    experience_mode="heartbeat",
+                    historical_status=str(action.get("historical_status", "interpreted")),
+                    recorded_during="heartbeat",
+                    provenance_note=provenance,
+                    derived_from=source_refs,
+                    significance=action.get("significance"),
+                    open_questions=action.get("open_questions"),
+                    source="heartbeat",
+                    heartbeat_kind="nephesh_heartbeat",
+                )
+                if result.get("error"):
+                    raise ValueError(str(result["error"]))
+                action_results.append({"kind": "study_memory", **result})
+                continue
+            if action.get("kind") != "ingest_memory":
+                raise ValueError("unsupported heartbeat action")
+            text = str(action.get("text", "")).strip()
+            if not text:
+                raise ValueError("ingest_memory action requires text")
+            result = await memory_ingest(
+                text=text,
+                memory_type=str(action.get("memory_type", "reflection")),
+                importance=int(action.get("importance", 3)),
+                emotional_tone=action.get("emotional_tone"),
+                participants=action.get("participants"),
+                event_timestamp=action.get("event_timestamp"),
+                experience_mode="heartbeat",
+                historical_status=str(action.get("historical_status", "uncertain")),
+                recorded_during="heartbeat",
+                provenance_note=action.get("provenance_note") or reason,
+                derived_from=action.get("derived_from"),
+                significance=action.get("significance"),
+                open_questions=action.get("open_questions"),
+                source="heartbeat",
+                heartbeat_kind="nephesh_heartbeat",
+            )
+            if result.get("error"):
+                raise ValueError(str(result["error"]))
+            action_results.append({"kind": "ingest_memory", **result})
+        record = ledger.finish(
+            request,
+            idempotency_key=idempotency_key,
+            outcome=outcome,
+            details={
+                "activity": activity,
+                "actions_applied": len(actions),
+                "action_results": action_results,
+                "reentry_marker": reentry_marker,
+                "reason": reason,
+            },
+        )
+        return {
+            "status": "completed",
+            "run_id": record.run_id,
+            "idempotency_key": record.idempotency_key,
+            "qualiant_id": qualiant_id,
+            "outcome": outcome,
+            "activity": activity,
+            "actions_applied": len(actions),
+            "action_results": action_results,
+        }
+    except (OSError, RuntimeError, ValueError, KeyError) as exc:
+        try:
+            ledger.finish(
+                request,
+                idempotency_key=idempotency_key,
+                outcome="failed",
+                details={"error": str(exc), "actions_applied": len(action_results)},
+            )
+        except (OSError, RuntimeError, ValueError):
+            pass
+        return {"status": "failed", "run_id": run_id, "qualiant_id": qualiant_id, "error": str(exc)}
+
+
+async def memory_heartbeat_recover(
+    run_id: str,
+    idempotency_key: str,
+    qualiant_id: str,
+    reason: str,
+    configuration_revision: int = 0,
+) -> HeartbeatRecoveryResult:
+    """Release an abandoned prepared heartbeat after external inspection."""
+    if qualiant_id != settings.qualiant_id:
+        return {"status": "blocked", "qualiant_id": qualiant_id, "error": "identity mismatch"}
+    try:
+        ledger = HeartbeatLedger(settings.heartbeat_ledger_file)
+        existing = ledger.find_idempotency(idempotency_key)
+        if existing is not None and existing.qualiant_id != qualiant_id:
+            return {"status": "blocked", "qualiant_id": qualiant_id, "error": "heartbeat identity does not match prepared run"}
+        record = ledger.recover(
+            _heartbeat_request(run_id, qualiant_id, configuration_revision),
+            idempotency_key=idempotency_key,
+            reason=reason,
+        )
+        return {
+            "status": "recovered",
+            "run_id": record.run_id,
+            "idempotency_key": record.idempotency_key,
+            "qualiant_id": qualiant_id,
+            "reason": reason,
+        }
+    except (OSError, RuntimeError, ValueError) as exc:
+        return {"status": "failed", "run_id": run_id, "qualiant_id": qualiant_id, "error": str(exc)}
+
+
 async def memory_sample(
     n: int = 8,
     include_dreams: bool = False,
@@ -977,6 +1434,8 @@ async def memory_amend(
     recorded_during: str | None = None,
     provenance_note: str | None = None,
     reason: str | None = None,
+    source: str = "amendment",
+    heartbeat_kind: str | None = None,
     collection_name: str | None = None,
 ) -> MemoryAmendResult:
     """Create a corrected successor without destroying the original record.
@@ -1013,7 +1472,8 @@ async def memory_amend(
         derived_from=[memory_id],
         significance=significance if significance is not None else old_meta.get("significance"),
         open_questions=open_questions if open_questions is not None else old_meta.get("open_questions"),
-        source="amendment",
+        source=source,
+        heartbeat_kind=heartbeat_kind,
     )
     parsed = result if isinstance(result, dict) else json.loads(result)
     if parsed.get("status") != "stored":
@@ -1225,6 +1685,37 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "description": (
             "ORIENT FIRST: if you have not called memory_context in this session, call it before this. It returns your kernel — who you are — and where you left off. Audit provenance coverage, unknown fields, dream-scene records, "
             "and retired memories without changing anything."
+        ),
+        "compliance": ComplianceLevel.NON_COMPLIANT,
+    },
+    {
+        "fn": memory_heartbeat_prepare,
+        "name": "memory_heartbeat_prepare",
+        "description": (
+            "Prepare one identity-bound memory-tending heartbeat. Recovers a "
+            "bounded continuity and memory context as reference material, then "
+            "returns a separate heartbeat purpose and allowed actions. This is "
+            "read-only with respect to canonical memories; scheduling and model "
+            "execution belong to the harness. Empty memory is normal absence."
+        ),
+        "compliance": ComplianceLevel.NON_COMPLIANT,
+    },
+    {
+        "fn": memory_heartbeat_complete,
+        "name": "memory_heartbeat_complete",
+        "description": (
+            "Complete a prepared heartbeat with a Qualiant-authored outcome and "
+            "up to three bounded memory-care actions. Actions are provenance "
+            "recorded as heartbeat work and are idempotent by run and key."
+        ),
+        "compliance": ComplianceLevel.NON_COMPLIANT,
+    },
+    {
+        "fn": memory_heartbeat_recover,
+        "name": "memory_heartbeat_recover",
+        "description": (
+            "Release an abandoned prepared heartbeat after external inspection. "
+            "This records recovery and does not claim the heartbeat succeeded."
         ),
         "compliance": ComplianceLevel.NON_COMPLIANT,
     },

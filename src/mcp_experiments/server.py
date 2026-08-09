@@ -11,6 +11,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .config import settings, resolve_tls
 from .results import HealthResult
+from .schedule import ScheduleStore
 from .tools import register_all, get_registered_names
 from .tools.vector_db import init as init_vector_db
 
@@ -142,6 +143,14 @@ def run() -> None:
         base_url=settings.embedding_base_url,
         operation_ledger_path=settings.operation_ledger_file,
     )
+
+    # Materialize the always-on default schedule at startup. The external
+    # harness/supervisor owns model execution, but an installed Nephesh must
+    # never appear schedule-less merely because no tool has been called yet.
+    ScheduleStore(
+        settings.schedule_config_file,
+        settings.schedule_events_file,
+    ).current()
 
     register_all(mcp)
 
