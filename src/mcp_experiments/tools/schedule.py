@@ -81,11 +81,36 @@ async def memory_schedule_claim(now: str | None = None) -> dict[str, Any]:
         return {"status": "failed", "error": str(exc)}
 
 
-async def memory_schedule_complete(operation_id: str, outcome: str, reason: str | None = None) -> dict[str, Any]:
-    """Record a terminal outcome for a harness-claimed scheduled operation."""
+async def memory_schedule_complete(
+    operation_id: str,
+    outcome: str,
+    reason: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Record a terminal outcome and harness evidence for a claimed operation."""
     try:
-        event = _store().finish(operation_id, outcome=outcome, reason=reason)
-        return {"status": outcome, "operation_id": operation_id, "recorded_at": event.recorded_at}
+        event = _store().finish(operation_id, outcome=outcome, reason=reason, details=details)
+        return {"status": event.event, "operation_id": operation_id, "recorded_at": event.recorded_at, "details": event.details}
+    except (OSError, TypeError, ValueError) as exc:
+        return {"status": "failed", "error": str(exc)}
+
+
+async def memory_schedule_inspect(now: str | None = None, stale_after_seconds: int = 3600) -> dict[str, Any]:
+    """Inspect active schedule claims and identify stale/orphaned claims."""
+    parsed = datetime.fromisoformat(now) if now else None
+    if parsed is not None and parsed.tzinfo is None:
+        return {"status": "failed", "error": "schedule timestamps must include a timezone"}
+    try:
+        return _store().inspect_claims(now=parsed, stale_after_seconds=stale_after_seconds)
+    except (OSError, TypeError, ValueError) as exc:
+        return {"status": "failed", "error": str(exc)}
+
+
+async def memory_schedule_recover(operation_id: str, reason: str) -> dict[str, Any]:
+    """Explicitly recover an orphaned claim without asserting that it succeeded."""
+    try:
+        event = _store().recover_claim(operation_id, reason=reason)
+        return {"status": event.event, "operation_id": operation_id, "recorded_at": event.recorded_at, "reason": event.reason}
     except (OSError, TypeError, ValueError) as exc:
         return {"status": "failed", "error": str(exc)}
 
@@ -97,4 +122,6 @@ TOOL_DEFINITIONS = [
     {"fn": memory_schedule_resume, "name": "memory_schedule_resume", "description": "Resume the durable heartbeat and dreaming schedule.", "compliance": ComplianceLevel.NON_COMPLIANT},
     {"fn": memory_schedule_claim, "name": "memory_schedule_claim", "description": "Claim one due heartbeat or dreaming operation for an external harness.", "compliance": ComplianceLevel.NON_COMPLIANT},
     {"fn": memory_schedule_complete, "name": "memory_schedule_complete", "description": "Record a terminal outcome for a harness-claimed scheduled operation.", "compliance": ComplianceLevel.NON_COMPLIANT},
+    {"fn": memory_schedule_inspect, "name": "memory_schedule_inspect", "description": "Inspect active and stale schedule claims without changing their outcome.", "compliance": ComplianceLevel.NON_COMPLIANT},
+    {"fn": memory_schedule_recover, "name": "memory_schedule_recover", "description": "Recover an orphaned schedule claim as an explicit non-success terminal event.", "compliance": ComplianceLevel.NON_COMPLIANT},
 ]

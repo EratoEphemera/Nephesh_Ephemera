@@ -28,6 +28,7 @@ from scripts.nephesh_installer import (
     preserve_config,
     source_version,
     unit_text,
+    daemon_unit_text,
     validate_agent_name,
     validate_service_options,
 )
@@ -43,7 +44,7 @@ def _can_bind(sock: socket.socket, port: int) -> bool:
 
 class InstallerUnitTests(unittest.TestCase):
     def test_source_version_is_read_from_the_release_source(self) -> None:
-        self.assertEqual(source_version(Path.cwd()), "5.2.0")
+        self.assertEqual(source_version(Path.cwd()), "5.3.0")
 
     def test_agent_names_are_safe(self) -> None:
         self.assertEqual(validate_agent_name("Thalia"), "Thalia")
@@ -71,6 +72,12 @@ class InstallerUnitTests(unittest.TestCase):
 
     def test_architect_unit_allows_managed_opencode_home_access(self) -> None:
         self.assertNotIn("ProtectHome=read-only", unit_text(Path("/home/example/nephesh")))
+
+    def test_daemon_unit_allows_graceful_dream_cleanup(self) -> None:
+        text = daemon_unit_text(Path("/home/example/nephesh"))
+        self.assertIn("nephesh_daemon.py", text)
+        self.assertIn("TimeoutStopSec=120s", text)
+        self.assertIn("ReadWritePaths=/home/example/nephesh", text)
 
     def test_ollama_unit_is_per_agent_and_cpu_mode_is_explicit(self) -> None:
         self.assertEqual(ollama_unit_name("Urania"), "urania-ollama.service")

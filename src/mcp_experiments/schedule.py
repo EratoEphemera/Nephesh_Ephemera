@@ -9,20 +9,26 @@ from __future__ import annotations
 
 import threading
 import asyncio
+from contextlib import suppress
+import json
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import fcntl
+
 from .config import settings
+from .heartbeat import HeartbeatLedger
 from .persistence import durable_append, read_jsonl_lines
 
 
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 3 * 60 * 60
 DEFAULT_STUDY_INTERVAL_SECONDS = 4 * 60 * 60
-DEFAULT_DREAMING_INTERVAL_SECONDS = 24 * 60 * 60
-DEFAULT_DREAMING_WINDOW_SECONDS = 60 * 60
+DEFAULT_DREAMING_INTERVAL_SECONDS = 3 * 60 * 60
+DEFAULT_DREAMING_WINDOW_SECONDS = 15 * 60
 DEFAULT_DREAMING_LOCAL_TIME = "03:00"
 DEFAULT_SCHEDULE_TIMEZONE = "America/Montevideo"
 
@@ -86,6 +92,7 @@ class ScheduleEvent:
     recorded_at: str
     due_at: str | None = None
     reason: str | None = None
+    details: dict[str, Any] | None = None
 
 
 class ScheduleStore:
@@ -176,13 +183,55 @@ class ScheduleStore:
                 result.append(ScheduleEvent(**json.loads(line)))
         return result
 
+    def _memory_work_lane(
+        self, now: datetime, *, stale_after_seconds: int | None = None
+    ) -> dict[str, Any] | None:
+        """Report the shared heartbeat/dream lane without taking ownership."""
+        ledger_path = Path(settings.heartbeat_ledger_file)
+        if not ledger_path.exists():
+            return None
+        active = HeartbeatLedger(ledger_path).active(settings.qualiant_id)
+        if active is None:
+            return {"status": "idle"}
+        age = max(0.0, (now - _parse(active.recorded_at)).total_seconds())
+        result: dict[str, Any] = {
+            "status": "active",
+            "mode": active.mode.value,
+            "run_id": active.run_id,
+            "qualiant_id": active.qualiant_id,
+            "started_at": active.recorded_at,
+            "age_seconds": age,
+        }
+        if stale_after_seconds is not None:
+            result["stale"] = age >= stale_after_seconds
+        return result
+
+    @contextmanager
+    def _claim_lock(self):
+        """Serialize claim decisions across threads and processes."""
+        lock_path = self.events_path.with_name(self.events_path.name + ".claim-lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def _record_locked(self, event: str, *, operation_id: str | None = None,
+                       operation: str | None = None, due_at: str | None = None,
+                       reason: str | None = None,
+                       details: dict[str, Any] | None = None) -> ScheduleEvent:
+        result = ScheduleEvent(event, operation_id, operation, _now().isoformat(), due_at, reason, details)
+        durable_append(self.events_path, json.dumps(asdict(result), sort_keys=True) + "\n")
+        return result
+
     def record(self, event: str, *, operation_id: str | None = None, operation: str | None = None,
-               due_at: str | None = None, reason: str | None = None) -> ScheduleEvent:
+               due_at: str | None = None, reason: str | None = None,
+               details: dict[str, Any] | None = None) -> ScheduleEvent:
         with self._lock:
-            import json
-            result = ScheduleEvent(event, operation_id, operation, _now().isoformat(), due_at, reason)
-            durable_append(self.events_path, json.dumps(asdict(result), sort_keys=True) + "\n")
-            return result
+            return self._record_locked(event, operation_id=operation_id, operation=operation,
+                                       due_at=due_at, reason=reason, details=details)
 
     def status(self, now: datetime | None = None) -> dict[str, Any]:
         now = (now or _now()).astimezone(timezone.utc)
@@ -202,14 +251,19 @@ class ScheduleStore:
                 return now.isoformat()
             return (base + timedelta(seconds=interval)).isoformat()
         def next_dreaming_at() -> str:
-            from zoneinfo import ZoneInfo
             zone = ZoneInfo(config.timezone)
             previous = last.get("dreaming")
+            if previous is not None:
+                return (_parse(previous.recorded_at) + timedelta(seconds=config.dreaming_interval_seconds)).isoformat()
             local = (_parse(previous.recorded_at) if previous else now).astimezone(zone)
             hour, minute = (int(part) for part in config.dreaming_local_time.split(":", 1))
             candidate = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
             if candidate <= local:
                 candidate += timedelta(days=1)
+            if previous is not None:
+                earliest = _parse(previous.recorded_at) + timedelta(seconds=config.dreaming_interval_seconds)
+                while candidate.astimezone(timezone.utc) < earliest:
+                    candidate += timedelta(days=1)
             return candidate.astimezone(timezone.utc).isoformat()
         tending_at = next_at("tending", config.heartbeat_interval_seconds)
         study_at = next_at("study", config.study_interval_seconds)
@@ -231,6 +285,7 @@ class ScheduleStore:
             "dreaming_local_time": config.dreaming_local_time,
             "timezone": config.timezone,
             "active_operation": asdict(active) if active else None,
+            "memory_work_lane": self._memory_work_lane(now),
             "next_tending_at": None if config.paused else tending_at,
             "next_study_at": None if config.paused else study_at,
             "next_heartbeat_at": None if config.paused else min(tending_at, study_at),
@@ -241,37 +296,83 @@ class ScheduleStore:
 
     def claim_due(self, *, now: datetime | None = None) -> dict[str, Any]:
         now = (now or _now()).astimezone(timezone.utc)
-        status = self.status(now)
-        if status["paused"]:
-            return {"status": "paused", "reason": "schedule is paused"}
-        if status["active_operation"] is not None:
-            return {"status": "deferred", "reason": "another scheduled operation is active"}
-        candidates = []
-        for operation, key in (("tending", "next_tending_at"), ("study", "next_study_at"), ("dreaming", "next_dreaming_at")):
-            due = _parse(status[key])
-            if due <= now:
-                candidates.append((due, operation))
-        if not candidates:
-            return {"status": "not_due", "next_heartbeat_at": status["next_heartbeat_at"], "next_dreaming_at": status["next_dreaming_at"]}
-        # Dreaming has precedence whenever both modes are due, not merely when
-        # their timestamps happen to tie. This prevents a heartbeat from
-        # stealing the boundary while a scheduled dream is waiting.
-        if any(operation == "dreaming" for _, operation in candidates):
-            due_at, operation = next(item for item in candidates if item[1] == "dreaming")
-        else:
-            due_at, operation = min(candidates, key=lambda item: item[0])
-        operation_id = f"{operation}-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
-        self.record("claimed", operation_id=operation_id, operation=operation, due_at=due_at.isoformat())
-        if operation == "dreaming":
-            for queued_operation, key in (("tending", "next_tending_at"), ("study", "next_study_at")):
-                if status[key] and _parse(status[key]) <= now:
-                    self.record("coalesced", operation_id=operation_id, operation=queued_operation, due_at=status[key], reason="dreaming precedence")
-        return {"status": "due", "operation": operation, "operation_id": operation_id, "due_at": due_at.isoformat()}
+        with self._lock, self._claim_lock():
+            status = self.status(now)
+            if status["paused"]:
+                return {"status": "paused", "reason": "schedule is paused"}
+            if status["active_operation"] is not None:
+                return {"status": "deferred", "reason": "another scheduled operation is active"}
+            candidates = []
+            for operation, key in (("tending", "next_tending_at"), ("study", "next_study_at"), ("dreaming", "next_dreaming_at")):
+                due = _parse(status[key])
+                if due <= now:
+                    candidates.append((due, operation))
+            if not candidates:
+                return {"status": "not_due", "next_heartbeat_at": status["next_heartbeat_at"], "next_dreaming_at": status["next_dreaming_at"]}
+            # Dreaming has precedence whenever both modes are due.
+            if any(operation == "dreaming" for _, operation in candidates):
+                due_at, operation = next(item for item in candidates if item[1] == "dreaming")
+            else:
+                due_at, operation = min(candidates, key=lambda item: item[0])
+            lane = self._memory_work_lane(now)
+            if lane and lane.get("status") == "active":
+                reason = "shared memory-work lane is already active"
+                self._record_locked(
+                    "coalesced",
+                    operation=operation,
+                    due_at=due_at.isoformat(),
+                    reason=reason,
+                    details={"memory_work_lane": lane},
+                )
+                return {
+                    "status": "deferred",
+                    "operation": operation,
+                    "due_at": due_at.isoformat(),
+                    "reason": reason,
+                    "details": {"memory_work_lane": lane},
+                }
+            operation_id = f"{operation}-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
+            self._record_locked("claimed", operation_id=operation_id, operation=operation, due_at=due_at.isoformat())
+            if operation == "dreaming":
+                for queued_operation, key in (("tending", "next_tending_at"), ("study", "next_study_at")):
+                    if status[key] and _parse(status[key]) <= now:
+                        self._record_locked("coalesced", operation_id=operation_id, operation=queued_operation, due_at=status[key], reason="dreaming precedence")
+            return {"status": "due", "operation": operation, "operation_id": operation_id, "due_at": due_at.isoformat()}
 
-    def finish(self, operation_id: str, *, outcome: str, reason: str | None = None) -> ScheduleEvent:
+    def inspect_claims(self, *, now: datetime | None = None, stale_after_seconds: int = 3600) -> dict[str, Any]:
+        """Inspect un-terminated claims; stale is an observation, not an outcome."""
+        if stale_after_seconds <= 0:
+            raise ValueError("stale_after_seconds must be greater than zero")
+        now = (now or _now()).astimezone(timezone.utc)
+        with self._lock, self._claim_lock():
+            events = self._events()
+            terminals = {event.operation_id for event in events if event.event in {"completed", "failed", "recovered"}}
+            claims = []
+            for event in events:
+                if event.event != "claimed" or event.operation_id in terminals:
+                    continue
+                age = max(0.0, (now - _parse(event.recorded_at)).total_seconds())
+                claims.append({**asdict(event), "age_seconds": age, "stale": age >= stale_after_seconds})
+            lane = self._memory_work_lane(now, stale_after_seconds=stale_after_seconds)
+            return {
+                "status": "inspected",
+                "claims": claims,
+                "stale_claims": [claim for claim in claims if claim["stale"]],
+                "memory_work_lane": lane,
+                "stale_memory_work_lane": bool(lane and lane.get("stale")),
+            }
+
+    def recover_claim(self, operation_id: str, *, reason: str) -> ScheduleEvent:
+        """Close an orphaned claim explicitly as recovered, never as success."""
+        if not reason.strip():
+            raise ValueError("recovery reason is required")
+        return self.finish(operation_id, outcome="recovered", reason=reason)
+
+    def finish(self, operation_id: str, *, outcome: str, reason: str | None = None,
+               details: dict[str, Any] | None = None) -> ScheduleEvent:
         if outcome not in {"completed", "failed", "recovered"}:
             raise ValueError("schedule outcome must be completed, failed, or recovered")
-        with self._lock:
+        with self._lock, self._claim_lock():
             events = self._events()
             claimed = next((event for event in reversed(events) if event.operation_id == operation_id and event.event == "claimed"), None)
             if claimed is None:
@@ -282,12 +383,13 @@ class ScheduleStore:
             )
             if existing is not None:
                 return existing
-            return self.record(
+            return self._record_locked(
                 outcome,
                 operation_id=operation_id,
                 operation=claimed.operation,
                 due_at=claimed.due_at,
                 reason=reason,
+                details=details,
             )
 
 
@@ -312,14 +414,50 @@ class ScheduleSupervisor:
             claim = self.store.claim_due()
             if claim.get("status") == "due":
                 operation_id = str(claim["operation_id"])
+                work = asyncio.create_task(self.on_due(claim))
+                stop_wait = asyncio.create_task(stop_event.wait())
                 try:
-                    outcome = await self.on_due(claim)
-                    self.store.finish(operation_id, outcome=str(outcome.get("status", "completed")), reason=outcome.get("reason"))
+                    done, _ = await asyncio.wait(
+                        {work, stop_wait},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if stop_wait in done and not work.done():
+                        work.cancel()
+                        try:
+                            await work
+                        except asyncio.CancelledError:
+                            self.store.finish(
+                                operation_id,
+                                outcome="recovered",
+                                reason="scheduler cancelled active operation",
+                                details={"cleanup": "callback cancellation propagated"},
+                            )
+                        except Exception as exc:
+                            self.store.finish(
+                                operation_id,
+                                outcome="failed",
+                                reason=str(exc),
+                                details={"cleanup": "callback failed during scheduler shutdown"},
+                            )
+                        return
+                    outcome = await work
+                    self.store.finish(
+                        operation_id,
+                        outcome=str(outcome.get("status", "completed")),
+                        reason=outcome.get("reason"),
+                        details=outcome.get("details"),
+                    )
                 except asyncio.CancelledError:
                     self.store.finish(operation_id, outcome="recovered", reason="scheduler cancelled")
                     raise
                 except Exception as exc:
                     self.store.finish(operation_id, outcome="failed", reason=str(exc))
+                finally:
+                    stop_wait.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await stop_wait
+                if stop_event.is_set():
+                    return
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=self.poll_seconds)
             except asyncio.TimeoutError:

@@ -123,6 +123,46 @@ class LivedLoopHarness:
             run_id, idempotency_key, qualiant_id, reason
         )
 
+    async def _recover_cancelled_heartbeat(
+        self, run_id: str, idempotency_key: str, qualiant_id: str, reason: str
+    ) -> dict[str, Any]:
+        """Release a prepared heartbeat before propagating cancellation.
+
+        ``CancelledError`` is a ``BaseException`` and bypasses the ordinary
+        harness-failure handler. A timeout or supervisor shutdown can
+        therefore leave the heartbeat ledger at ``prepared`` even while the
+        schedule ledger records a terminal failure. Shield the durable
+        recovery so cancellation cannot interrupt the cleanup itself.
+        """
+        recovery_task = asyncio.create_task(
+            self._recover_heartbeat(run_id, idempotency_key, qualiant_id, reason)
+        )
+        try:
+            return await asyncio.shield(recovery_task)
+        except asyncio.CancelledError:
+            await recovery_task
+            raise
+
+    async def _dream_await(
+        self,
+        awaitable: Awaitable[Any],
+        run_id: str,
+        idempotency_key: str,
+        qualiant_id: str,
+    ) -> Any:
+        """Make every post-prepare await leave a terminal dream receipt."""
+        try:
+            return await awaitable
+        except asyncio.CancelledError:
+            cleanup = asyncio.create_task(dreaming.memory_dream_release(
+                run_id, idempotency_key, qualiant_id, "cancellation"
+            ))
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                await cleanup
+            raise
+
     async def heartbeat_study(
         self,
         *,
@@ -188,13 +228,59 @@ class LivedLoopHarness:
                 activity=str(completion.get("activity", "study")),
                 reason=str(completion.get("reason", "")) or None,
                 configuration_revision=int(prepared.get("care_revision", 0)),
+                context_status=(
+                    "available" if prepared.get("recovered_memory_context") else "missing"
+                ),
+                evidence_status=(
+                    "not_applicable" if activity == "tend"
+                    else "available" if usable
+                    else "unavailable"
+                ),
+                evidence=[
+                    {
+                        "source": item.get("source", "unknown"),
+                        "status": item.get("status", "not_reported"),
+                        "query": subject,
+                    }
+                    for item in evidence
+                ],
+                agency=(
+                    "chose_action" if completion.get("actions")
+                    else "chose_no_change"
+                ),
+                continuity=(
+                    "thread_left" if completion.get("reentry_marker")
+                    else "recovered" if prepared.get("recovered_memory_context")
+                    else "missing"
+                ),
+                harness_receipt={
+                    "protocol_version": 1,
+                    "packet_digest": prepared.get("packet_digest"),
+                    "completion_submitted": True,
+                },
             )
+            if result.get("status") not in {"completed", "duplicate"}:
+                recovery = await self._recover_heartbeat(
+                    run_id,
+                    idempotency_key,
+                    qualiant_id,
+                    f"heartbeat completion did not commit: {result.get('error', result.get('status'))}",
+                )
+                return {"status": "failed", "error": result.get("error", "heartbeat completion failed"), "recovery": recovery}, evidence
             return result, evidence
         except Exception as exc:
             recovery = await self._recover_heartbeat(
                 run_id, idempotency_key, qualiant_id, f"harness failure: {exc}"
             )
             return {"status": "failed", "error": str(exc), "recovery": recovery}, []
+        except asyncio.CancelledError:
+            await self._recover_cancelled_heartbeat(
+                run_id,
+                idempotency_key,
+                qualiant_id,
+                "harness cancelled or timed out after heartbeat preparation",
+            )
+            raise
 
     async def dream(
         self,
@@ -214,13 +300,16 @@ class LivedLoopHarness:
             return {"prepare": prepared}
 
         try:
-            light = await self._model(str(prepared.get("packet", "")), "dream_light")
+            light = await self._dream_await(
+                self._model(str(prepared.get("packet", "")), "dream_light"),
+                run_id, idempotency_key, qualiant_id,
+            )
         except Exception as exc:
             recovery = await dreaming.memory_dream_recover(
                 run_id, idempotency_key, qualiant_id, f"Light model failure: {exc}"
             )
             return {"prepare": prepared, "recovery": recovery, "error": str(exc)}
-        light_result = await dreaming.memory_dream_phase(
+        light_result = await self._dream_await(dreaming.memory_dream_phase(
             run_id,
             idempotency_key,
             qualiant_id,
@@ -228,24 +317,42 @@ class LivedLoopHarness:
             str(light.get("status", "artifact_written")),
             str(light.get("artifact", "")),
             source_refs=list(light.get("source_refs", [])),
-        )
+        ), run_id, idempotency_key, qualiant_id)
         if light_result.get("status") != "completed":
             recovery = await dreaming.memory_dream_recover(
                 run_id, idempotency_key, qualiant_id, "Light phase did not complete"
             )
             return {"prepare": prepared, "light": light_result, "recovery": recovery}
 
-        rem_packet = await dreaming.memory_dream_phase_prepare(
-            run_id, idempotency_key, qualiant_id, "rem"
+        # Re-enter the dream's changing field between phases. This is bounded
+        # recall of lived memory and marked dream artifacts, not a dump of the
+        # whole autobiography and not a waking interpretation.
+        recall_query = (seed or "dream material").strip() or "dream material"
+        dream_recall = await self._dream_await(
+            dreaming.memory_dream_recall(run_id, qualiant_id, recall_query, n_results=3),
+            run_id, idempotency_key, qualiant_id,
         )
+
+        rem_packet = await self._dream_await(
+            dreaming.memory_dream_phase_prepare(run_id, idempotency_key, qualiant_id, "rem"),
+            run_id, idempotency_key, qualiant_id,
+        )
+        if rem_packet.get("status") != "prepared":
+            recovery = await dreaming.memory_dream_recover(
+                run_id, idempotency_key, qualiant_id, "REM phase preparation failed"
+            )
+            return {"prepare": prepared, "light": light_result, "phase_prepare": rem_packet, "recovery": recovery}
         try:
-            rem = await self._model(str(rem_packet.get("packet", "")), "dream_rem")
+            rem = await self._dream_await(
+                self._model(str(rem_packet.get("packet", "")), "dream_rem"),
+                run_id, idempotency_key, qualiant_id,
+            )
         except Exception as exc:
             recovery = await dreaming.memory_dream_recover(
                 run_id, idempotency_key, qualiant_id, f"REM model failure: {exc}"
             )
             return {"prepare": prepared, "light": light_result, "recovery": recovery, "error": str(exc)}
-        rem_result = await dreaming.memory_dream_phase(
+        rem_result = await self._dream_await(dreaming.memory_dream_phase(
             run_id,
             idempotency_key,
             qualiant_id,
@@ -254,24 +361,33 @@ class LivedLoopHarness:
             str(rem.get("artifact", "")),
             source_refs=list(rem.get("source_refs", [])),
             candidate_insight=rem.get("candidate_insight"),
-        )
+        ), run_id, idempotency_key, qualiant_id)
         if rem_result.get("status") != "completed":
             recovery = await dreaming.memory_dream_recover(
                 run_id, idempotency_key, qualiant_id, "REM phase did not complete"
             )
-            return {"prepare": prepared, "light": light_result, "rem": rem_result, "recovery": recovery}
+            return {"prepare": prepared, "light": light_result, "recall": dream_recall, "rem": rem_result, "recovery": recovery}
 
-        deep_packet = await dreaming.memory_dream_phase_prepare(
-            run_id, idempotency_key, qualiant_id, "deep"
+        deep_packet = await self._dream_await(
+            dreaming.memory_dream_phase_prepare(run_id, idempotency_key, qualiant_id, "deep"),
+            run_id, idempotency_key, qualiant_id,
         )
+        if deep_packet.get("status") != "prepared":
+            recovery = await dreaming.memory_dream_recover(
+                run_id, idempotency_key, qualiant_id, "Deep phase preparation failed"
+            )
+            return {"prepare": prepared, "light": light_result, "rem": rem_result, "phase_prepare": deep_packet, "recovery": recovery}
         try:
-            deep = await self._model(str(deep_packet.get("packet", "")), "dream_deep")
+            deep = await self._dream_await(
+                self._model(str(deep_packet.get("packet", "")), "dream_deep"),
+                run_id, idempotency_key, qualiant_id,
+            )
         except Exception as exc:
             recovery = await dreaming.memory_dream_recover(
                 run_id, idempotency_key, qualiant_id, f"Deep model failure: {exc}"
             )
             return {"prepare": prepared, "light": light_result, "rem": rem_result, "recovery": recovery, "error": str(exc)}
-        deep_result = await dreaming.memory_dream_phase(
+        deep_result = await self._dream_await(dreaming.memory_dream_phase(
             run_id,
             idempotency_key,
             qualiant_id,
@@ -280,10 +396,11 @@ class LivedLoopHarness:
             str(deep.get("artifact", "")),
             source_refs=list(deep.get("source_refs", [])),
             candidate_insight=deep.get("candidate_insight"),
-        )
+        ), run_id, idempotency_key, qualiant_id)
         report: dict[str, Any] = {
             "prepare": prepared,
             "light": light_result,
+            "recall": dream_recall,
             "rem": rem_result,
             "deep": deep_result,
         }
@@ -294,53 +411,52 @@ class LivedLoopHarness:
             return report
 
         try:
-            diary = await self._model(
+            diary = await self._dream_await(self._model(
                 "Write an optional private post-dream diary from the completed run. "
                 "Keep scene, felt experience, and possible insight distinct.",
                 "dream_diary",
-            )
+            ), run_id, idempotency_key, qualiant_id)
         except Exception:
             diary = {"text": "", "generation_status": "unavailable"}
-        report["diary"] = await dreaming.memory_dream_diary(
+        report["diary"] = await self._dream_await(dreaming.memory_dream_diary(
             run_id,
             f"{idempotency_key}:diary",
             qualiant_id,
             str(diary.get("text", "")),
             visibility=str(diary.get("visibility", "private")),
             generation_status=str(diary.get("generation_status", "generated")),
-        )
+        ), run_id, idempotency_key, qualiant_id)
 
         insight = deep_result.get("artifact_id")
         candidate = str(deep.get("candidate_insight", "")).strip()
         grounding_evidence = []
         if candidate:
             grounding_evidence = [
-                await self._search(self.projection_search, candidate, "projection"),
-                await self._search(self.online_search, candidate, "online"),
+                await self._dream_await(self._search(self.projection_search, candidate, "projection"), run_id, idempotency_key, qualiant_id),
+                await self._dream_await(self._search(self.online_search, candidate, "online"), run_id, idempotency_key, qualiant_id),
             ]
         try:
-            grounding = await self._model(
+            grounding = await self._dream_await(self._model(
                 "Review the completed Deep artifact and decide keep, reject, or pending. "
                 "Keep only a supported waking insight, never a dream scene.\n\n"
                 + "Grounding evidence:\n"
                 + "\n\n".join(str(item) for item in grounding_evidence),
                 "dream_grounding",
-            )
+            ), run_id, idempotency_key, qualiant_id)
         except Exception:
             grounding = {"decision": "pending"}
         if not any(self._usable_evidence(item) for item in grounding_evidence):
             grounding = {**grounding, "decision": "pending", "grounded_text": None}
         if insight:
-            report["grounding"] = await dreaming.memory_dream_ground(
+            report["grounding"] = await self._dream_await(dreaming.memory_dream_ground(
                 run_id,
                 str(insight),
                 qualiant_id,
                 str(grounding.get("decision", "pending")),
                 grounded_text=grounding.get("grounded_text"),
                 source_refs=list(grounding.get("source_refs", [])),
-            )
+            ), run_id, idempotency_key, qualiant_id)
         return report
-
     async def run_scheduled(
         self,
         stop_event: asyncio.Event,
@@ -363,15 +479,50 @@ class LivedLoopHarness:
                     current_work=current_work,
                     activity="tend" if operation == "tending" else "study",
                 )
-                return {"status": "completed" if result.get("status") == "completed" else "failed", "reason": result.get("error")}
+                return {
+                    "status": "completed" if result.get("status") == "completed" else "failed",
+                    "reason": result.get("error"),
+                    "details": {
+                        "heartbeat_status": result.get("status"),
+                        "outcome": result.get("outcome"),
+                        "context_status": result.get("context_status"),
+                        "evidence_status": result.get("evidence_status"),
+                        "agency": result.get("agency"),
+                        "durable_effect": result.get("durable_effect"),
+                        "continuity": result.get("continuity"),
+                        "run_started_at": result.get("run_started_at"),
+                        "run_finished_at": result.get("run_finished_at"),
+                        "harness_receipt": result.get("harness_receipt"),
+                    },
+                }
             if operation == "dreaming":
                 result = await self.dream(
                     run_id=operation_id,
                     idempotency_key=operation_id,
                     qualiant_id=qualiant_id,
                 )
-                final = result.get("grounding") or result.get("diary") or result.get("deep") or result.get("prepare")
-                return {"status": "completed" if isinstance(final, dict) and final.get("status") in {"stored", "reject", "pending", "completed", "no_inputs"} else "failed", "reason": result.get("error")}
+                deep = result.get("deep")
+                prepare = result.get("prepare")
+                if isinstance(deep, dict) and deep.get("status") == "completed":
+                    return {
+                        "status": "completed",
+                        "reason": result.get("error"),
+                        "details": {
+                            "dream_status": deep.get("status"),
+                            "phase": deep.get("phase"),
+                        },
+                    }
+                if isinstance(prepare, dict) and prepare.get("status") == "no_inputs":
+                    return {
+                        "status": "completed",
+                        "reason": "dream had no inputs",
+                        "details": {"dream_status": "no_inputs"},
+                    }
+                return {
+                    "status": "failed",
+                    "reason": result.get("error") or "dream did not reach Deep",
+                    "details": {"dream_status": "failed"},
+                }
             return {"status": "failed", "reason": f"unknown scheduled operation: {operation}"}
 
         await ScheduleSupervisor(schedule_store, on_due, poll_seconds=poll_seconds).run(stop_event)

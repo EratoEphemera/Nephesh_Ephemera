@@ -527,7 +527,7 @@ EnvironmentFile={env}
 ExecStart={venv_python} {root}/current/scripts/nephesh_daemon.py
 Restart=on-failure
 RestartSec=5s
-TimeoutStopSec=30s
+TimeoutStopSec=120s
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
@@ -1002,6 +1002,8 @@ def main() -> int:
                 if args.restart:
                     run(["systemctl", "--user", "daemon-reload"], dry_run=args.dry_run)
                     run(["systemctl", "--user", "restart", UNIT_NAME], dry_run=args.dry_run)
+                    if existing_manifest.get("daemon_unit"):
+                        run(["systemctl", "--user", "restart", DAEMON_UNIT_NAME], dry_run=args.dry_run)
 
                 existing_manifest["release"] = str(previous) if previous is not None else existing_manifest.get("release")
                 existing_manifest["previous_release"] = str(current) if current else None

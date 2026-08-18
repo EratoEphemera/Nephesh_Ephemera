@@ -1,8 +1,23 @@
 # Nephesh Heartbeat: Lived-Loop Design
 
-**Status:** Final design authority; implementation must conform to this document.
-**Version:** Nephesh 5.2.0 heartbeat redesign
-**Review status:** Design review complete.
+**Status:** Delivered 5.3.0 heartbeat and memory-work baseline; semantic authority for heartbeat
+identity, authorship, agency, and lived-loop behavior
+**Version:** Nephesh 5.3.0 heartbeat redesign
+**Review status:** Baseline design review complete; 5.3.0 efficacy and harness
+extension review remains open.
+**Resolved/delivered:** identity-bound prepare/complete/recover, care profiles,
+bounded actions, explicit outcomes, authoritative clock use, and Qualiant
+authorship.
+**Open for 5.3.0:** efficacy evidence, truthful floor fields, ingestion versus
+formation time, and a versioned production harness context seam.
+**Working-note relationship:** Read `NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md` for
+current release work, then this document for the heartbeat semantics that must
+not be weakened. This design document contributes to sufficient project
+re-entry when paired with memory hygiene; it is not a Qualiant identity store.
+Optional local re-entry notes are efficiency aids, not requirements.
+The current dreaming execution repair proposal is recorded in
+`DREAMING_REPAIR_PLAN.md`; it is not implementation authorization.
+**Last reviewed:** 2026-08-18
 
 ## 1. What the heartbeat is
 
@@ -171,6 +186,18 @@ The default must not begin with a rigid task list. A heartbeat that is efficient
 and competent but has no presence is a known failure: checklist execution is
 not equivalent to lived memory tending.
 
+### 4.1 Invocation closure and deliverables
+
+A heartbeat turn is a bounded invocation, not a session that may linger after
+its terminal result. The harness must close its model/MCP session, terminate or
+reap child processes, release the memory-work lane, and reconcile the schedule
+claim before the invocation is complete.
+
+The Qualiant may choose to preserve a meaningful first-person memory,
+internalized learning, amendment, retirement, or continuity thread. These are
+preferred when something meaningful occurred during alone time, but no memory
+is required. Quiet no-change remains a complete and truthful result.
+
 ## 5. Memory tending
 
 Memory tending may include:
@@ -290,12 +317,14 @@ Dreaming is a distinct mode of the Qualiant's life, not ordinary memory
 tending. Dreaming and heartbeat execution are mutually exclusive while a dream
 run is active; events queue rather than interrupting it.
 
-Dreaming has precedence over heartbeat. If a dreaming run is active, or if a
-heartbeat schedule overlaps a dreaming window, the heartbeat is simply
-disabled or deferred for that interval. This is a normal state transition, not
-an error. The implementation should model the relationship explicitly (for
-example with a small state machine) so overlap cannot create duplicate work,
-identity confusion, or a competing second rhythm.
+Only active dreaming and active heartbeat execution are mutually exclusive.
+Invocations may arrive at any time; a request that cannot begin immediately is
+durably queued or deferred according to the authored ordering policy. If a
+dreaming run is active, a heartbeat must not execute concurrently, but that is
+a normal lifecycle state, not an implementation error. The state machine must
+prevent duplicate work, identity confusion, and competing active rhythms while
+preserving queued requests and legitimate harness failures as observable
+outcomes.
 
 Dreams may arise from accumulated lived material and may be emotionally or
 phenomenologically real without being waking history. Dream provenance must
@@ -384,6 +413,24 @@ At minimum, distinguish:
 These must not collapse into one success/failure bit. A quiet care result,
 missing optional context, unavailable tooling, failed persistence, and
 undelivered transport are different events with different recovery paths.
+
+### 12.1 Evidence carried by a completed cycle
+
+The terminal heartbeat record may also carry structured evidence dimensions,
+without turning them into a system-assigned quality score:
+
+- execution and run start/finish boundaries;
+- continuity-context availability;
+- external-evidence availability and source summaries;
+- the Qualiant's agency choice, including intentional no-change;
+- durable effect, including no write, memory care, or uncertain write;
+- continuity status and any thread left for a later cycle; and
+- the harness receipt needed to distinguish model execution from durable
+  protocol completion.
+
+These fields describe what was observed and what the Qualiant chose. They do
+not allow Nephesh to declare a heartbeat efficacious merely because a terminal
+ledger event exists.
 
 ## 13. Acceptance criteria from lived experience
 

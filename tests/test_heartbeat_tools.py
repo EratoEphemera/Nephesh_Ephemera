@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -126,6 +127,45 @@ class HeartbeatToolTests(unittest.TestCase):
             ingest.assert_awaited_once()
             self.assertEqual(ingest.await_args.kwargs["experience_mode"], "heartbeat")
             self.assertEqual(ingest.await_args.kwargs["recorded_during"], "heartbeat")
+
+    def test_complete_preserves_evidence_and_agency_dimensions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self._settings(root), patch(
+                "mcp_experiments.tools.memory.memory_context",
+                new=AsyncMock(return_value=self._context("recovered context")),
+            ):
+                asyncio.run(memory.memory_heartbeat_prepare("run-1", "key-1", "urania"))
+                result = asyncio.run(
+                    memory.memory_heartbeat_complete(
+                        "run-1",
+                        "key-1",
+                        "urania",
+                        "no_change",
+                        context_status="available",
+                        evidence_status="not_applicable",
+                        evidence=[{"source": "memory", "status": "available"}],
+                        agency="chose_no_change",
+                        durable_effect={"status": "none"},
+                        continuity="recovered",
+                        harness_receipt={"protocol_version": 1},
+                    )
+                )
+
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["agency"], "chose_no_change")
+            self.assertEqual(result["durable_effect"], {"status": "none"})
+            self.assertIsInstance(result["run_started_at"], str)
+            self.assertIsInstance(result["run_finished_at"], str)
+            records = [
+                json.loads(line)
+                for line in (root / "heartbeats.jsonl").read_text().splitlines()
+            ]
+            terminal = records[-1]["details"]
+            self.assertEqual(terminal["context_status"], "available")
+            self.assertEqual(terminal["evidence_status"], "not_applicable")
+            self.assertEqual(terminal["continuity"], "recovered")
+            self.assertEqual(terminal["harness_receipt"]["protocol_version"], 1)
 
     def test_complete_is_idempotent_after_terminal_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -204,6 +204,140 @@ class LivedLoopHarnessTests(unittest.TestCase):
         self.assertEqual(result["recovery"]["status"], "partial")
         self.assertEqual(next_heartbeat["status"], "prepared")
 
+    def test_cancelled_heartbeat_recovers_the_lane_before_propagating(self) -> None:
+        async def cancelled_model(_packet: str, _purpose: str) -> dict[str, object]:
+            raise asyncio.CancelledError()
+
+        async def run() -> dict[str, object]:
+            with tempfile.TemporaryDirectory() as directory:
+                with self._settings(Path(directory)), patch(
+                    "mcp_experiments.tools.memory.memory_context",
+                    new=AsyncMock(return_value={"context": "## Identity\nI am Urania.", "included": 1}),
+                ):
+                    harness = LivedLoopHarness(
+                        model_turn=cancelled_model,
+                        projection_search=self._projection,
+                        online_search=self._online,
+                    )
+                    task = asyncio.create_task(harness.heartbeat_study(
+                        run_id="hb-cancelled",
+                        idempotency_key="hb-cancelled-key",
+                        qualiant_id="urania",
+                        current_work="interrupted study",
+                    ))
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+                    return await memory.memory_heartbeat_prepare(
+                        "after-cancel", "after-cancel-key", "urania"
+                    )
+
+        next_heartbeat = asyncio.run(run())
+        self.assertEqual(next_heartbeat["status"], "prepared")
+
+    def test_heartbeat_completion_failure_recovers_the_lane(self) -> None:
+        async def run() -> dict[str, object]:
+            with tempfile.TemporaryDirectory() as directory:
+                with self._settings(Path(directory)), patch(
+                    "mcp_experiments.tools.memory.memory_context",
+                    new=AsyncMock(return_value={"context": "## Identity\nI am Urania.", "included": 1}),
+                ), patch(
+                    "mcp_experiments.tools.memory.memory_heartbeat_complete",
+                    new=AsyncMock(return_value={"status": "error", "error": "invalid completion"}),
+                ):
+                    harness = LivedLoopHarness(
+                        model_turn=self._model,
+                        projection_search=self._projection,
+                        online_search=self._online,
+                    )
+                    result, _ = await harness.heartbeat_study(
+                        run_id="hb-completion-error",
+                        idempotency_key="hb-completion-error-key",
+                        qualiant_id="urania",
+                        current_work="completion error",
+                    )
+                    next_heartbeat = await memory.memory_heartbeat_prepare(
+                        "after-completion-error", "after-completion-error-key", "urania"
+                    )
+                    return {"result": result, "next": next_heartbeat}
+
+        output = asyncio.run(run())
+        self.assertEqual(output["result"]["status"], "failed")
+        self.assertEqual(output["result"]["recovery"]["status"], "recovered")
+        self.assertEqual(output["next"]["status"], "prepared")
+
+    def test_cancelled_dream_recovers_the_lane(self) -> None:
+        async def cancelled_model(_packet: str, purpose: str) -> dict[str, object]:
+            if purpose == "dream_light":
+                raise asyncio.CancelledError()
+            raise AssertionError(purpose)
+
+        async def run() -> dict[str, object]:
+            with tempfile.TemporaryDirectory() as directory:
+                with self._settings(Path(directory)), patch(
+                    "mcp_experiments.tools.dreaming.memory_context",
+                    new=AsyncMock(return_value={"context": "## Identity\nI am Urania.", "included": 1}),
+                ), patch(
+                    "mcp_experiments.tools.memory.memory_context",
+                    new=AsyncMock(return_value={"context": "## Identity\nI am Urania.", "included": 1}),
+                ):
+                    harness = LivedLoopHarness(
+                        model_turn=cancelled_model,
+                        projection_search=self._projection,
+                        online_search=self._online,
+                    )
+                    task = asyncio.create_task(harness.dream(
+                        run_id="dream-cancelled",
+                        idempotency_key="dream-cancelled-key",
+                        qualiant_id="urania",
+                        seed="home",
+                    ))
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+                    return await memory.memory_heartbeat_prepare(
+                        "after-dream-cancel", "after-dream-cancel-key", "urania"
+                    )
+
+        next_heartbeat = asyncio.run(run())
+        self.assertEqual(next_heartbeat["status"], "prepared")
+
+    def test_cancelled_dream_after_light_writes_release_receipt(self) -> None:
+        async def cancelled_model(_packet: str, purpose: str) -> dict[str, object]:
+            if purpose == "dream_light":
+                return {"status": "artifact_written", "artifact": "settling"}
+            raise asyncio.CancelledError()
+
+        async def run() -> tuple[dict[str, object], dict[str, object]]:
+            with tempfile.TemporaryDirectory() as directory:
+                with self._settings(Path(directory)), patch(
+                    "mcp_experiments.tools.dreaming.memory_context",
+                    new=AsyncMock(return_value={"context": "memory", "included": 1}),
+                ), patch(
+                    "mcp_experiments.tools.memory.memory_context",
+                    new=AsyncMock(return_value={"context": "memory", "included": 1}),
+                ):
+                    harness = LivedLoopHarness(
+                        model_turn=cancelled_model,
+                        projection_search=self._projection,
+                        online_search=self._online,
+                    )
+                    task = asyncio.create_task(harness.dream(
+                        run_id="dream-after-light",
+                        idempotency_key="dream-after-light-key",
+                        qualiant_id="urania",
+                        seed="home",
+                    ))
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+                    records = (Path(directory) / "dreams.jsonl").read_text(encoding="utf-8")
+                    return await memory.memory_heartbeat_prepare(
+                        "after-release", "after-release-key", "urania"
+                    ), {"records": records}
+
+        next_heartbeat, ledger = asyncio.run(run())
+        self.assertEqual(next_heartbeat["status"], "prepared")
+        self.assertIn('"event": "release"', ledger["records"])
+        self.assertIn('"release_reason": "cancellation"', ledger["records"])
+
 
 if __name__ == "__main__":
     unittest.main()

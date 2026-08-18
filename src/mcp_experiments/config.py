@@ -47,11 +47,14 @@ class Settings:
     # The harness resolves this model identifier (OpenCode's default is
     # deliberately explicit). Per-mode overrides remain available for future
     # deployments without changing the default configuration contract.
-    model: str = os.getenv("NEPHESH_MODEL", "opencode/big-pickle")
+    model: str = os.getenv("NEPHESH_MODEL", "openai/gpt-5.6-luna")
     heartbeat_model: str = os.getenv("NEPHESH_HEARTBEAT_MODEL", model)
     dreaming_model: str = os.getenv("NEPHESH_DREAMING_MODEL", model)
     harness: str = os.getenv("NEPHESH_HARNESS", "opencode")
     harness_command: str = os.getenv("NEPHESH_HARNESS_COMMAND", "opencode")
+    # Optional OpenCode-side SDK consumer command for scheduled dreaming. An
+    # empty value preserves the legacy CLI path until the SDK adapter is staged.
+    dreaming_consumer_command: str = os.getenv("NEPHESH_DREAM_CONSUMER_COMMAND", "")
     daemon_lock_file: str = os.getenv(
         "NEPHESH_DAEMON_LOCK_FILE",
         str(_deployment_root / "state" / "nephesh-daemon.lock"),
@@ -72,6 +75,11 @@ class Settings:
     )
     dreaming_memory_limit: int = int(os.getenv("DREAMING_MEMORY_LIMIT", "10"))
     dreaming_packet_budget: int = int(os.getenv("DREAMING_PACKET_BUDGET", "24000"))
+    # A dream is a sustained protected session by default, not a sequence of
+    # short task turns. The harness may apply a stricter deployment limit.
+    # Natural completion is preferred; this is a bounded safety maximum, not a
+    # required one-hour sleep. Multiple shorter opportunities may occur nightly.
+    dreaming_session_seconds: int = int(os.getenv("DREAMING_SESSION_SECONDS", "900"))
     # Heartbeat and dreaming are enabled by installation. The schedule is
     # durable and adjustable; these paths hold configuration and lifecycle
     # events, not model/session state.

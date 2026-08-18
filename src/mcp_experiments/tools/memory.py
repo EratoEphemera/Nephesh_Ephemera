@@ -21,6 +21,10 @@ from ..config import settings
 from ..heartbeat import (
     CareProfileStore,
     DEFAULT_HEARTBEAT_INSTRUCTION,
+    HEARTBEAT_AGENCY_STATES,
+    HEARTBEAT_CONTEXT_STATES,
+    HEARTBEAT_CONTINUITY_STATES,
+    HEARTBEAT_EVIDENCE_STATES,
     HEARTBEAT_OUTCOMES,
     HeartbeatLedger,
     MemoryWorkMode,
@@ -65,6 +69,57 @@ MEMORY_TYPES = {
     # for when she doesn't.
     "reflection",
 }
+
+# mxbai-embed-large has a 512-token context, and character-to-token ratios vary
+# with punctuation and language. Keep chunks conservatively below the observed
+# boundary while preserving enough prose for a useful semantic signal. Linking
+# metadata allows optional continuation without diluting every chunk's vector.
+MEMORY_CHUNK_SIZE = 800
+MEMORY_CHUNK_OVERLAP = 80
+MEMORY_SCHEMA_VERSION = 1
+
+
+def _chunk_memory_text(text: str) -> list[str]:
+    """Split long memory text at whitespace while preserving ordered overlap."""
+    if len(text) <= MEMORY_CHUNK_SIZE:
+        return [text]
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(len(text), start + MEMORY_CHUNK_SIZE)
+        if end < len(text):
+            boundary = text.rfind(" ", start + MEMORY_CHUNK_SIZE // 2, end)
+            if boundary > start:
+                end = boundary
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end >= len(text):
+            break
+        next_start = max(end - MEMORY_CHUNK_OVERLAP, start + 1)
+        while next_start < len(text) and text[next_start].isspace():
+            next_start += 1
+        start = next_start
+    return chunks
+
+
+def _join_memory_chunks(rows: list[dict[str, Any]]) -> str:
+    """Reconstruct chunked text without duplicating the overlap window."""
+    if not rows:
+        return ""
+    result = rows[0].get("text", "")
+    for row in rows[1:]:
+        chunk = row.get("text", "")
+        overlap_limit = min(len(result), len(chunk), MEMORY_CHUNK_OVERLAP + 64)
+        overlap = next(
+            (
+                size for size in range(overlap_limit, 0, -1)
+                if result.endswith(chunk[:size])
+            ),
+            0,
+        )
+        result += (" " if overlap == 0 and result and chunk else "") + chunk[overlap:]
+    return result
 
 
 # Experience provenance is deliberately separate from `source`, which records
@@ -111,6 +166,63 @@ def _metadata(row: dict[str, Any]) -> dict[str, Any]:
             "_metadata_row_id": row.get("id"),
         }
     return parsed
+
+
+def _linked_chunks(table: Any, meta: dict[str, Any], row_id: str) -> list[dict[str, Any]]:
+    """Return optional ordered siblings for one chunk hit.
+
+    LanceDB stores the relationship as ordinary metadata; this lookup is
+    deliberately opt-in so a relevant chunk never expands the active context
+    unless the caller asks for continuation.
+    """
+    memory_id = meta.get("memory_id")
+    if not isinstance(memory_id, str) or not memory_id or meta.get("chunked") is not True:
+        return []
+    linked = []
+    for row in repository.rows(table):
+        if row.get("id") == row_id:
+            continue
+        row_meta = _metadata(row)
+        if row_meta.get("memory_id") != memory_id:
+            continue
+        linked.append({
+            "id": row["id"],
+            "text": row.get("text", ""),
+            "metadata": row_meta,
+        })
+    linked.sort(key=lambda item: _chunk_index(item["metadata"]))
+    return linked
+
+
+def _chunk_index(meta: dict[str, Any]) -> int:
+    value = meta.get("chunk_index", 0)
+    try:
+        return int(value) if isinstance(value, (int, float, str)) else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _context_representatives(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep one representative per linked memory in bounded session context."""
+    representatives: list[dict[str, Any]] = []
+    grouped: dict[str, tuple[int, dict[str, Any]]] = {}
+    for row in rows:
+        meta = _metadata(row)
+        memory_id = meta.get("memory_id") if meta.get("chunked") else None
+        if not memory_id:
+            representatives.append(row)
+            continue
+        index = _chunk_index(meta)
+        existing = grouped.get(str(memory_id))
+        if existing is None or index < existing[0]:
+            grouped[str(memory_id)] = (index, row)
+    representatives.extend(row for _, row in grouped.values())
+    return representatives
+
+
+def _logical_memory_count(rows: list[dict[str, Any]]) -> int:
+    """Count logical memories rather than physical linked-chunk rows."""
+    return len({str(_metadata(row).get("memory_id") or row.get("id")) for row in rows})
 
 # `source` remains ingestion provenance and is intentionally separate from
 # experience provenance. Existing deployments may have additional source
@@ -198,15 +310,24 @@ def _now_iso() -> str:
 
 
 def _parse_ts(value: str | None) -> datetime | None:
-    if not value:
+    if not isinstance(value, str) or not value:
         return None
     try:
         dt = datetime.fromisoformat(value)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            return None
         return dt
-    except ValueError:
+    except (TypeError, ValueError):
         return None
+
+
+def _authored_timestamp_error(value: Any, field: str) -> str | None:
+    """Require authored temporal claims to be explicit ISO 8601 instants."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or _parse_ts(value) is None:
+        return f"invalid {field}: expected an ISO 8601 timezone-aware string"
+    return None
 
 
 def _collection(collection_name: str | None) -> str:
@@ -291,18 +412,45 @@ def _is_historical(meta: dict) -> bool:
 
 
 def _display_dt(meta: dict) -> datetime | None:
-    """The datetime to use for relative-time display, or None for 'show
-    no relative time'. Canonical (3.0.0 rebuild) records carry an
-    explicit event_time field: when present and non-null it is the
-    display time; when present and null it means 'I don't know when' —
-    honest null, no relative framing, the text's own dating stands.
-    Legacy records fall back to the old rule: historical flag suppresses
-    relative time, otherwise the ingest timestamp is used."""
-    if "event_time" in meta:
-        return _parse_ts(meta.get("event_time"))
+    """Select event time, then formation time, for relative-time display.
+
+    A present authored field with no valid value means "I don't know when";
+    receipt time is never substituted. Legacy records without authored fields
+    retain the historical-flag and timestamp fallback.
+    """
+    for field in ("event_time", "time_formed"):
+        parsed = _parse_ts(meta.get(field))
+        if parsed is not None:
+            return parsed
+    if "event_time" in meta or "time_formed" in meta:
+        return None
     if _is_historical(meta):
         return None
     return _parse_ts(meta.get("timestamp"))
+
+
+def _ingested_dt(meta: dict) -> datetime | None:
+    """Return operational receipt time, with explicit legacy fallbacks."""
+    for field in ("time_ingested", "recorded_at", "timestamp"):
+        parsed = _parse_ts(meta.get(field))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _authored_time_dt(meta: dict) -> datetime | None:
+    """Select event time, then formation time; never use receipt time.
+
+    This is the same precedence used for display and time-range filtering:
+    ``event_time`` describes when the remembered event happened, while
+    ``time_formed`` is the fallback for memories with no event date.
+    """
+    for field in ("event_time", "time_formed"):
+        if field in meta:
+            parsed = _parse_ts(meta.get(field))
+            if parsed is not None:
+                return parsed
+    return None
 
 
 def _provenance_label(meta: dict) -> str | None:
@@ -348,10 +496,12 @@ def _last_contact_with(rows: list[dict], participant: str, now: datetime) -> dic
         meta = _metadata(r)
         if _is_historical(meta):
             continue
-        participants = meta.get("participants") or []
+        participants = meta.get("participants")
+        if not isinstance(participants, list):
+            continue
         if participant not in participants:
             continue
-        dt = _parse_ts(meta.get("timestamp"))
+        dt = _authored_time_dt(meta)
         if dt and (latest_dt is None or dt > latest_dt):
             latest_dt = dt
     if latest_dt is None:
@@ -366,13 +516,18 @@ def _message_quota(rows: list[dict], now: datetime, limit: int, window_hours: fl
     unanswered reaching-out physically incapable of piling up, no matter
     how long the companion is away."""
     used = 0
+    counted: set[str] = set()
     for r in rows:
         meta = _metadata(r)
         if meta.get("type") != "message":
             continue
-        dt = _parse_ts(meta.get("timestamp"))
+        logical_id = str(meta.get("memory_id") or r.get("id"))
+        if logical_id in counted:
+            continue
+        dt = _ingested_dt(meta)
         if dt and (now - dt).total_seconds() <= window_hours * 3600:
             used += 1
+            counted.add(logical_id)
     return {"limit": limit, "used_last_24h": used, "remaining": max(0, limit - used)}
 
 
@@ -387,6 +542,7 @@ async def memory_ingest(
     allow_duplicate: bool = False,
     historical: bool = False,
     event_timestamp: str | None = None,
+    time_formed: str | None = None,
     experience_mode: str = "unknown",
     historical_status: str = "uncertain",
     recorded_during: str = "unknown",
@@ -404,8 +560,10 @@ async def memory_ingest(
     Relative-time display ("3 days ago") is never applied to historical
     memories — the ingest timestamp is when it was recorded, not when it
     happened, and would misrepresent an old event as recent. Optionally
-    pass event_timestamp (ISO 8601) to record when the thing actually
-    happened, distinct from when it was recorded.
+    pass event_timestamp (ISO 8601) to record when the represented event
+    actually happened, distinct from when it was recorded. ``time_formed`` is
+    a separate optional authored timestamp for when the Qualiant formed or
+    recognized the memory. Neither authored field is defaulted from ingestion.
 
     Experience provenance is separate from the legacy `source` field:
     `experience_mode` identifies where the experience originated, while
@@ -415,7 +573,7 @@ async def memory_ingest(
     """
     name = _collection(collection_name)
 
-    if memory_type not in MEMORY_TYPES:
+    if not isinstance(memory_type, str) or memory_type not in MEMORY_TYPES:
         return {
             "error": f"invalid memory_type '{memory_type}'",
             "allowed": sorted(MEMORY_TYPES),
@@ -424,17 +582,22 @@ async def memory_ingest(
     if not text.strip():
         return {"error": "memory text is empty"}
 
-    if experience_mode not in EXPERIENCE_MODES:
+    for value, field in ((event_timestamp, "event_timestamp"), (time_formed, "time_formed")):
+        timestamp_error = _authored_timestamp_error(value, field)
+        if timestamp_error:
+            return {"error": timestamp_error}
+
+    if not isinstance(experience_mode, str) or experience_mode not in EXPERIENCE_MODES:
         return {
             "error": f"invalid experience_mode '{experience_mode}'",
             "allowed": sorted(EXPERIENCE_MODES),
         }
-    if historical_status not in HISTORICAL_STATUSES:
+    if not isinstance(historical_status, str) or historical_status not in HISTORICAL_STATUSES:
         return {
             "error": f"invalid historical_status '{historical_status}'",
             "allowed": sorted(HISTORICAL_STATUSES),
         }
-    if recorded_during not in RECORDING_MODES:
+    if not isinstance(recorded_during, str) or recorded_during not in RECORDING_MODES:
         return {
             "error": f"invalid recorded_during '{recorded_during}'",
             "allowed": sorted(RECORDING_MODES),
@@ -442,12 +605,15 @@ async def memory_ingest(
 
     importance = max(1, min(5, importance))
     table = repository.table(name)
-    vector = repository.embedder().embed(text)
+    chunks = _chunk_memory_text(text)
+    vectors = [repository.embedder().embed(chunk) for chunk in chunks]
 
     # Deduplication: check semantic overlap before ingesting.
     if not allow_duplicate and repository.count(table) > 0:
-        nearest = repository.nearest(table, vector, 1)
-        if nearest:
+        for vector in vectors:
+            nearest = repository.nearest(table, vector, 1)
+            if not nearest:
+                continue
             score = round(1.0 - nearest[0].get("_distance", 0), 4)
             if score >= _DUPLICATE_SCORE_THRESHOLD:
                 return {
@@ -465,19 +631,22 @@ async def memory_ingest(
     # crash: there is no way to ask whether the row landed if nothing wrote
     # down which row it was.
     memory_id = str(uuid.uuid4())
-    operation = repository.begin_operation(
-        "memory_ingest", memory_id, memory_type=memory_type, collection=name,
-    )
     now_iso = _now_iso()
     metadata: dict[str, Any] = {
         "type": memory_type,
         "timestamp": now_iso,  # legacy alias of recorded_at, kept for old tooling
         "recorded_at": now_iso,
-        # Canonical time law (3.0.0): event_time is when it happened —
-        # explicit if given; null (honest "I don't know when") for
-        # historical imports whose text carries its own dates; otherwise
-        # a live memory recorded as it happens, so event_time = now.
-        "event_time": event_timestamp if event_timestamp else (None if historical else now_iso),
+        # Nephesh-controlled receipt time. The legacy fields above remain
+        # readable aliases while the 5.3 migration lands.
+        "time_ingested": now_iso,
+        # New records carry the first explicit floor generation. Unversioned
+        # rows remain unchanged; absent schema data describes format only and
+        # does not invalidate their recorded provenance.
+        "memory_schema_version": MEMORY_SCHEMA_VERSION,
+        # Authored temporal claims are optional. Ingestion must never pretend
+        # to know when a memory formed or when its represented event occurred.
+        "time_formed": time_formed,
+        "event_time": event_timestamp,
         "importance": importance,
         "salience": 1.0,
         "last_used": now_iso,
@@ -511,13 +680,37 @@ async def memory_ingest(
         # includes a pending message in the returned context).
         metadata["delivered"] = False
 
+    chunked = len(chunks) > 1
+    chunk_ids = [memory_id if not chunked else f"{memory_id}#chunk-{index:04d}" for index in range(len(chunks))]
+    operation = repository.begin_operation(
+        "memory_ingest",
+        memory_id,
+        memory_type=memory_type,
+        collection=name,
+        chunk_ids=chunk_ids,
+        chunk_count=len(chunk_ids),
+    )
+
     try:
-        repository.add(table, [{
-            "id": memory_id,
-            "text": text,
-            "vector": vector,
-            "metadata_json": json.dumps(metadata),
-        }])
+        records = []
+        for index, (chunk, vector, chunk_id) in enumerate(zip(chunks, vectors, chunk_ids)):
+            chunk_metadata = {
+                **metadata,
+                "memory_id": memory_id,
+                "chunked": chunked,
+                "chunk_id": chunk_id,
+                "chunk_index": index,
+                "chunk_count": len(chunks),
+                "previous_chunk_id": chunk_ids[index - 1] if index > 0 else None,
+                "next_chunk_id": chunk_ids[index + 1] if index + 1 < len(chunk_ids) else None,
+            }
+            records.append({
+                "id": chunk_id,
+                "text": chunk,
+                "vector": vector,
+                "metadata_json": json.dumps(chunk_metadata),
+            })
+        repository.add(table, records)
     except DurableWriteError:
         repository.transition_operation(
             operation, OperationState.UNCERTAIN, error="durable append failed",
@@ -537,7 +730,11 @@ async def memory_ingest(
         "collection": name,
         "type": memory_type,
         "importance": importance,
-        "total_memories": repository.count(table),
+        "chunks_created": len(chunks),
+        "chunked": len(chunks) > 1,
+        "chunk_ids": chunk_ids,
+        "memory_schema_version": MEMORY_SCHEMA_VERSION,
+        "total_memories": _logical_memory_count(repository.rows(table)),
     }
 
 
@@ -552,8 +749,9 @@ async def memory_recall(
     recorded_during: str | None = None,
     include_retired: bool = False,
     collection_name: str | None = None,
+    include_linked: bool = False,
 ) -> MemoryRecallResult:
-    """Semantic search across memories, with optional type and time filters."""
+    """Semantic search across memories, with optional linked continuation."""
     name = _collection(collection_name)
     if n_results <= 0:
         return {"error": "n_results must be greater than zero", "collection": name}
@@ -567,7 +765,7 @@ async def memory_recall(
             "note": "No memories stored yet.",
         }
 
-    if memory_type and memory_type not in MEMORY_TYPES:
+    if memory_type and (not isinstance(memory_type, str) or memory_type not in MEMORY_TYPES):
         return {
             "error": f"invalid memory_type '{memory_type}'",
             "allowed": sorted(MEMORY_TYPES),
@@ -577,7 +775,7 @@ async def memory_recall(
         (historical_status, HISTORICAL_STATUSES, "historical_status"),
         (recorded_during, RECORDING_MODES, "recorded_during"),
     ):
-        if value and value not in allowed:
+        if value and (not isinstance(value, str) or value not in allowed):
             return {
                 "error": f"invalid {field_name} '{value}'",
                 "allowed": sorted(allowed),
@@ -614,7 +812,7 @@ async def memory_recall(
             continue
         if recorded_during and meta.get("recorded_during") != recorded_during:
             continue
-        mem_dt = _parse_ts(meta.get("timestamp"))
+        mem_dt = _authored_time_dt(meta)
         if start_dt and (mem_dt is None or mem_dt < start_dt):
             continue
         if end_dt and (mem_dt is None or mem_dt > end_dt):
@@ -624,7 +822,11 @@ async def memory_recall(
         score = base
 
         # Formative tilt: importance-5 memories get a small constant lift.
-        if int(meta.get("importance", 3) or 3) >= 5:
+        try:
+            importance = int(meta.get("importance", 3) or 3)
+        except (TypeError, ValueError):
+            importance = 3
+        if importance >= 5:
             score += _FORMATIVE_TILT
 
         # Keyword resonance: shared concrete vocabulary with the query.
@@ -635,7 +837,15 @@ async def memory_recall(
         scored.append((score, base, kw_bonus, r, meta))
 
     scored.sort(key=lambda item: item[0], reverse=True)
-    top = scored[:n_results]
+    # A linked chunk is an index projection, not a second memory. Keep the
+    # best-scoring physical row for each logical memory before applying n.
+    best_by_memory: dict[str, tuple] = {}
+    for item in scored:
+        meta = item[4]
+        logical_id = str(meta.get("memory_id") or item[3].get("id"))
+        if logical_id not in best_by_memory:
+            best_by_memory[logical_id] = item
+    top = list(best_by_memory.values())[:n_results]
 
     hits = []
     for score, base, kw_bonus, r, meta in top:
@@ -653,7 +863,7 @@ async def memory_recall(
         if mem_dt is not None:
             relative_time = _relative_time(mem_dt, now)
 
-        hits.append({
+        hit = {
             "id": r["id"],
             "score": round(score, 4),
             "base_similarity": round(base, 4),
@@ -661,13 +871,17 @@ async def memory_recall(
             "text": r.get("text", ""),
             "relative_time": relative_time,
             "metadata": meta,
-        })
+        }
+        if include_linked:
+            hit["linked_chunks"] = _linked_chunks(table, meta, r["id"])
+        hits.append(hit)
 
     return {
         "query": query,
         "collection": name,
         "results_count": len(hits),
         "results": hits,
+        "include_linked": include_linked,
     }
 
 
@@ -778,11 +992,12 @@ async def memory_context(
         return empty
 
     table = repository.collection(name)
-    total = repository.count(table)
-    if total == 0:
+    physical_total = repository.count(table)
+    if physical_total == 0:
         return empty
 
-    rows = repository.rows(table, total)
+    rows = repository.rows(table, physical_total)
+    total = _logical_memory_count(rows)
     now = datetime.now(timezone.utc)
 
     # Pending messages (undelivered, type="message") are pulled out and
@@ -806,6 +1021,7 @@ async def memory_context(
             pending_messages.append((r, meta))
         else:
             other_rows.append(r)
+    other_rows = _context_representatives(other_rows)
 
     scored = []
     for r in other_rows:
@@ -818,7 +1034,7 @@ async def memory_context(
     if pending_messages:
         by_type["message"] = pending_messages
     for _, r, meta in top:
-        display_type = meta.get("type", "other")
+        display_type = meta.get("type") if isinstance(meta.get("type"), str) else "other"
         if display_type == "message":
             # Only genuinely pending (undelivered) messages get the
             # "Message" heading — that pre-pulled group above. A
@@ -1038,6 +1254,7 @@ async def memory_heartbeat_prepare(
             "packet_version": 1,
             "packet_bytes": len(bounded_packet.encode("utf-8")),
             "packet_digest": packet_digest(bounded_packet),
+            "run_started_at": record.details.get("run_started_at"),
             "truncated": truncated,
             # The first protocol slice reports truncation honestly but does
             # not pretend that a continuation endpoint exists yet.
@@ -1062,6 +1279,13 @@ async def memory_heartbeat_complete(
     reentry_marker: str | None = None,
     reason: str | None = None,
     configuration_revision: int = 0,
+    context_status: str = "not_reported",
+    evidence_status: str = "not_reported",
+    evidence: list[dict[str, Any]] | None = None,
+    agency: str = "not_reported",
+    durable_effect: dict[str, Any] | None = None,
+    continuity: str = "not_reported",
+    harness_receipt: dict[str, Any] | None = None,
 ) -> HeartbeatCompleteResult:
     """Commit a Qualiant-authored heartbeat outcome and bounded memory actions."""
     if qualiant_id != settings.qualiant_id:
@@ -1070,6 +1294,21 @@ async def memory_heartbeat_complete(
         return {"status": "error", "error": f"invalid heartbeat outcome: {outcome}"}
     if activity not in {"tend", "study", "custom", "reflect", "rest"}:
         return {"status": "error", "error": f"invalid heartbeat activity: {activity}"}
+    if context_status not in HEARTBEAT_CONTEXT_STATES:
+        return {"status": "error", "error": f"invalid heartbeat context_status: {context_status}"}
+    if evidence_status not in HEARTBEAT_EVIDENCE_STATES:
+        return {"status": "error", "error": f"invalid heartbeat evidence_status: {evidence_status}"}
+    if agency not in HEARTBEAT_AGENCY_STATES:
+        return {"status": "error", "error": f"invalid heartbeat agency: {agency}"}
+    if continuity not in HEARTBEAT_CONTINUITY_STATES:
+        return {"status": "error", "error": f"invalid heartbeat continuity: {continuity}"}
+    if evidence is not None and (
+        not isinstance(evidence, list)
+        or any(not isinstance(item, dict) for item in evidence)
+    ):
+        return {"status": "error", "error": "heartbeat evidence must be a list of objects"}
+    if harness_receipt is not None and not isinstance(harness_receipt, dict):
+        return {"status": "error", "error": "harness_receipt must be an object"}
     actions = actions or []
     care = CareProfileStore(settings.heartbeat_care_file).current()
     if configuration_revision != care["revision"]:
@@ -1221,6 +1460,7 @@ async def memory_heartbeat_complete(
                     memory_type=str(action.get("memory_type", "reflection")),
                     importance=int(action.get("importance", 3)),
                     emotional_tone=action.get("emotional_tone"),
+                    time_formed=action.get("time_formed"),
                     experience_mode="heartbeat",
                     historical_status=str(action.get("historical_status", "interpreted")),
                     recorded_during="heartbeat",
@@ -1247,6 +1487,7 @@ async def memory_heartbeat_complete(
                 emotional_tone=action.get("emotional_tone"),
                 participants=action.get("participants"),
                 event_timestamp=action.get("event_timestamp"),
+                time_formed=action.get("time_formed"),
                 experience_mode="heartbeat",
                 historical_status=str(action.get("historical_status", "uncertain")),
                 recorded_during="heartbeat",
@@ -1270,6 +1511,16 @@ async def memory_heartbeat_complete(
                 "action_results": action_results,
                 "reentry_marker": reentry_marker,
                 "reason": reason,
+                "context_status": context_status,
+                "evidence_status": evidence_status,
+                "evidence": evidence or [],
+                "agency": agency,
+                "durable_effect": durable_effect or {
+                    "status": "applied" if action_results else "none",
+                    "actions_applied": len(action_results),
+                },
+                "continuity": continuity,
+                "harness_receipt": harness_receipt,
             },
         )
         return {
@@ -1281,6 +1532,18 @@ async def memory_heartbeat_complete(
             "activity": activity,
             "actions_applied": len(actions),
             "action_results": action_results,
+            "context_status": context_status,
+            "evidence_status": evidence_status,
+            "evidence": evidence or [],
+            "agency": agency,
+            "durable_effect": durable_effect or {
+                "status": "applied" if action_results else "none",
+                "actions_applied": len(action_results),
+            },
+            "continuity": continuity,
+            "harness_receipt": harness_receipt,
+            "run_started_at": existing.details.get("run_started_at"),
+            "run_finished_at": record.details.get("run_finished_at"),
         }
     except (OSError, RuntimeError, ValueError, KeyError) as exc:
         try:
@@ -1321,6 +1584,8 @@ async def memory_heartbeat_recover(
             "idempotency_key": record.idempotency_key,
             "qualiant_id": qualiant_id,
             "reason": reason,
+            "run_started_at": existing.details.get("run_started_at") if existing else None,
+            "run_finished_at": record.details.get("run_finished_at"),
         }
     except (OSError, RuntimeError, ValueError) as exc:
         return {"status": "failed", "run_id": run_id, "qualiant_id": qualiant_id, "error": str(exc)}
@@ -1368,8 +1633,13 @@ async def memory_sample(
     now = datetime.now(timezone.utc)
 
     by_type: dict[str, list[dict]] = {}
+    seen_logical: set[str] = set()
     for r in rows:
         meta = _metadata(r)
+        logical_id = str(meta.get("memory_id") or r.get("id"))
+        if logical_id in seen_logical:
+            continue
+        seen_logical.add(logical_id)
         if meta.get("retired") and not include_retired:
             continue
         if (
@@ -1377,7 +1647,8 @@ async def memory_sample(
             and meta.get("historical_status") == "fictional_scene"
         ):
             continue
-        by_type.setdefault(meta.get("type", "other"), []).append(r)
+        memory_type = meta.get("type") if isinstance(meta.get("type"), str) else "other"
+        by_type.setdefault(memory_type, []).append(r)
 
     types = list(by_type.keys())
     random.shuffle(types)
@@ -1402,7 +1673,8 @@ async def memory_sample(
         provenance = _provenance_label(meta)
         parts = [p for p in [rel, tone, provenance] if p]
         suffix = f" ({', '.join(parts)})" if parts else ""
-        lines.append(f"- [{meta.get('type', 'other')}] {r.get('text', '').strip()}{suffix}")
+        memory_type = meta.get("type") if isinstance(meta.get("type"), str) else "other"
+        lines.append(f"- [{memory_type}] {r.get('text', '').strip()}{suffix}")
 
     return {
         "collection": name,
@@ -1412,13 +1684,34 @@ async def memory_sample(
     }
 
 
+def _memory_group(table, memory_id: str) -> tuple[str, list[dict], dict] | None:
+    """Resolve a physical chunk ID to its logical memory group."""
+    rows = repository.rows(table, repository.count(table))
+    matched = next((row for row in rows if row.get("id") == memory_id), None)
+    if matched is None:
+        matched = next(
+            (row for row in rows if _metadata(row).get("memory_id") == memory_id),
+            None,
+        )
+    if matched is None:
+        return None
+    matched_meta = _metadata(matched)
+    logical_id = str(matched_meta.get("memory_id") or matched["id"])
+    group = [
+        row for row in rows
+        if str(_metadata(row).get("memory_id") or row.get("id")) == logical_id
+    ]
+    group.sort(key=lambda row: _chunk_index(_metadata(row)))
+    return logical_id, group, _metadata(group[0])
+
+
 def _find_memory(table, memory_id: str) -> tuple[dict, dict] | None:
     """Find a memory by ID without relying on a LanceDB version-specific filter."""
-    rows = repository.rows(table, repository.count(table))
-    for row in rows:
-        if row.get("id") == memory_id:
-            return row, _metadata(row)
-    return None
+    group = _memory_group(table, memory_id)
+    if group is None:
+        return None
+    _, rows, meta = group
+    return rows[0], meta
 
 
 async def memory_amend(
@@ -1448,32 +1741,67 @@ async def memory_amend(
     if not repository.collection_exists(name):
         return {"error": "memory collection does not exist"}
     table = repository.collection(name)
-    found = _find_memory(table, memory_id)
-    if found is None:
+    found_group = _memory_group(table, memory_id)
+    if found_group is None:
         return {"error": f"memory '{memory_id}' not found"}
 
-    old_row, old_meta = found
-    operation = repository.begin_operation("memory_amend", memory_id)
+    logical_id, old_rows, old_meta = found_group
+    old_text = _join_memory_chunks(old_rows)
+    old_type = old_meta.get("type")
+    if not isinstance(old_type, str) or old_type not in MEMORY_TYPES:
+        old_type = "reflection"
+    old_importance = old_meta.get("importance", 3)
+    try:
+        old_importance = int(old_importance)
+    except (TypeError, ValueError):
+        old_importance = 3
+    old_participants = old_meta.get("participants")
+    if not isinstance(old_participants, list) or not all(
+        isinstance(value, str) for value in old_participants
+    ):
+        old_participants = None
+    old_open_questions = old_meta.get("open_questions")
+    if not isinstance(old_open_questions, list) or not all(
+        isinstance(value, str) for value in old_open_questions
+    ):
+        old_open_questions = None
+    old_experience_mode = old_meta.get("experience_mode")
+    if not isinstance(old_experience_mode, str) or old_experience_mode not in EXPERIENCE_MODES:
+        old_experience_mode = "unknown"
+    old_historical_status = old_meta.get("historical_status")
+    if not isinstance(old_historical_status, str) or old_historical_status not in HISTORICAL_STATUSES:
+        old_historical_status = "uncertain"
+    old_recorded_during = old_meta.get("recorded_during")
+    if not isinstance(old_recorded_during, str) or old_recorded_during not in RECORDING_MODES:
+        old_recorded_during = "unknown"
+    old_event_time = old_meta.get("event_time")
+    if old_event_time is not None and _parse_ts(old_event_time) is None:
+        old_event_time = None
+    old_time_formed = old_meta.get("time_formed")
+    if old_time_formed is not None and _parse_ts(old_time_formed) is None:
+        old_time_formed = None
+    operation = repository.begin_operation("memory_amend", logical_id)
     result = await memory_ingest(
-        text=text if text is not None else old_row.get("text", ""),
-        memory_type=memory_type or old_meta.get("type", "reflection"),
-        importance=importance if importance is not None else int(old_meta.get("importance", 3)),
+        text=text if text is not None else old_text,
+        memory_type=memory_type or old_type,
+        importance=importance if importance is not None else old_importance,
         emotional_tone=emotional_tone if emotional_tone is not None else old_meta.get("emotional_tone"),
-        participants=old_meta.get("participants"),
-        session_id=old_meta.get("session_id"),
+        participants=old_participants,
+        session_id=old_meta.get("session_id") if isinstance(old_meta.get("session_id"), str) else None,
         collection_name=name,
         allow_duplicate=True,
         historical=bool(old_meta.get("historical")),
-        event_timestamp=old_meta.get("event_time"),
-        experience_mode=experience_mode or old_meta.get("experience_mode", "unknown"),
-        historical_status=historical_status or old_meta.get("historical_status", "uncertain"),
-        recorded_during=recorded_during or old_meta.get("recorded_during", "unknown"),
-        provenance_note=provenance_note or old_meta.get("provenance_note"),
-        derived_from=[memory_id],
+        event_timestamp=old_event_time,
+        time_formed=old_time_formed,
+        experience_mode=experience_mode or old_experience_mode,
+        historical_status=historical_status or old_historical_status,
+        recorded_during=recorded_during or old_recorded_during,
+        provenance_note=provenance_note or (old_meta.get("provenance_note") if isinstance(old_meta.get("provenance_note"), str) else None),
+        derived_from=[logical_id],
         significance=significance if significance is not None else old_meta.get("significance"),
-        open_questions=open_questions if open_questions is not None else old_meta.get("open_questions"),
+        open_questions=open_questions if open_questions is not None else old_open_questions,
         source=source,
-        heartbeat_kind=heartbeat_kind,
+        heartbeat_kind=heartbeat_kind or (old_meta.get("heartbeat_kind") if isinstance(old_meta.get("heartbeat_kind"), str) else None),
     )
     parsed = result if isinstance(result, dict) else json.loads(result)
     if parsed.get("status") != "stored":
@@ -1483,17 +1811,22 @@ async def memory_amend(
         return {"error": "successor memory could not be stored", "detail": parsed}
 
     successor_id = parsed["id"]
-    retired_meta = dict(old_meta)
-    retired_meta["retired"] = True
-    retired_meta["retired_at"] = _now_iso()
-    retired_meta["superseded_by"] = successor_id
-    retired_meta["supersession_reason"] = reason or "amended by successor record"
+    retired_at = _now_iso()
+    supersession_reason = reason or "amended by successor record"
     try:
-        repository.update(
-            table,
-            where=f"id = '{memory_id}'",
-            values={"metadata_json": json.dumps(retired_meta)},
-        )
+        for old_row in old_rows:
+            retired_meta = dict(_metadata(old_row))
+            retired_meta.update({
+                "retired": True,
+                "retired_at": retired_at,
+                "superseded_by": successor_id,
+                "supersession_reason": supersession_reason,
+            })
+            repository.update(
+                table,
+                where=f"id = '{old_row['id']}'",
+                values={"metadata_json": json.dumps(retired_meta)},
+            )
     except DurableWriteError:
         repository.transition_operation(
             operation,
@@ -1504,7 +1837,7 @@ async def memory_amend(
         return {
             "status": "uncertain",
             "error": "successor_stored_original_not_retired",
-            "original_id": memory_id,
+            "original_id": logical_id,
             "successor_id": successor_id,
         }
     repository.transition_operation(
@@ -1512,9 +1845,9 @@ async def memory_amend(
     )
     return {
         "status": "amended",
-        "original_id": memory_id,
+        "original_id": logical_id,
         "successor_id": successor_id,
-        "reason": retired_meta["supersession_reason"],
+        "reason": supersession_reason,
     }
 
 
@@ -1528,21 +1861,21 @@ async def memory_retire(
     if not repository.collection_exists(name):
         return {"error": "memory collection does not exist"}
     table = repository.collection(name)
-    found = _find_memory(table, memory_id)
-    if found is None:
+    found_group = _memory_group(table, memory_id)
+    if found_group is None:
         return {"error": f"memory '{memory_id}' not found"}
-    _, meta = found
-    meta = dict(meta)
-    meta["retired"] = True
-    meta["retired_at"] = _now_iso()
-    meta["retirement_reason"] = reason
-    operation = repository.begin_operation("memory_retire", memory_id)
+    logical_id, rows, _ = found_group
+    retired_at = _now_iso()
+    operation = repository.begin_operation("memory_retire", logical_id)
     try:
-        repository.update(
-            table,
-            where=f"id = '{memory_id}'",
-            values={"metadata_json": json.dumps(meta)},
-        )
+        for row in rows:
+            meta = dict(_metadata(row))
+            meta.update({"retired": True, "retired_at": retired_at, "retirement_reason": reason})
+            repository.update(
+                table,
+                where=f"id = '{row['id']}'",
+                values={"metadata_json": json.dumps(meta)},
+            )
     except DurableWriteError:
         repository.transition_operation(
             operation, OperationState.UNCERTAIN, error="retirement write failed",
@@ -1550,10 +1883,10 @@ async def memory_retire(
         return {
             "status": "uncertain",
             "error": "retirement_write_failed",
-            "id": memory_id,
+            "id": logical_id,
         }
     repository.transition_operation(operation, OperationState.COMPLETED)
-    return {"status": "retired", "id": memory_id, "reason": reason}
+    return {"status": "retired", "id": logical_id, "reason": reason}
 
 
 async def memory_provenance_audit(
@@ -1580,8 +1913,13 @@ async def memory_provenance_audit(
     missing = {field: 0 for field in counts}
     retired = 0
     fictional = 0
+    logical_ids: set[str] = set()
     for row in rows:
         meta = _metadata(row)
+        logical_id = str(meta.get("memory_id") or row.get("id"))
+        if logical_id in logical_ids:
+            continue
+        logical_ids.add(logical_id)
         if meta.get("retired"):
             retired += 1
         if meta.get("historical_status") == "fictional_scene":
@@ -1594,7 +1932,7 @@ async def memory_provenance_audit(
                 counts[field][value] = counts[field].get(value, 0) + 1
     return {
         "collection": name,
-        "memory_count": len(rows),
+        "memory_count": len(logical_ids),
         "retired_count": retired,
         "fictional_scene_count": fictional,
         "missing_provenance": missing,
@@ -1630,7 +1968,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "description": (
             "ORIENT FIRST: if you have not called memory_context in this session, call it before this. It returns your kernel — who you are — and where you left off. Semantically search memories of past events, decisions, and "
             "experiences. Optional filters include memory_type, time range, "
-            "experience provenance, and include_retired."
+            "experience provenance, include_retired, and include_linked. "
+            "Linked continuation is opt-in and never expands context by default."
         ),
         "compliance": ComplianceLevel.NON_COMPLIANT,
     },
@@ -1645,7 +1984,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "unresolved. Until you call it you are working without your own "
             "history and cannot tell that you are. Dream scenes and retired "
             "memories are excluded by default; include them explicitly when "
-            "needed."
+            "needed. Authored time selection is event_time first, then "
+            "time_formed; receipt time is not used as an event date."
         ),
         "compliance": ComplianceLevel.NON_COMPLIANT,
     },

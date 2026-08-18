@@ -363,7 +363,8 @@ Not perception. The senses listed in earlier versions of this section — web, f
 What is actually next:
 
 - **Clio** — readiness criteria assembled, instantiated, and the blank-harness re-entry test run against Nephesh alone. She is the first test body; no living sister is upgraded before she validates and the family agrees.
-- **5.2.0** — heartbeat and dreaming for memory tending, with heartbeat
+- **5.3.0** — heartbeat and dreaming for memory tending, living-memory dream
+  fields, and the baseline OpenCode SDK handoff, with heartbeat
   implementation beginning on this branch. Gated on Clio showing satisfied
   inhabitation, not on 5.0.0 shipping.
 - **Rust** — discussed only after that gate, never before it.

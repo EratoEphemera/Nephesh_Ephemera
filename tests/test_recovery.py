@@ -81,6 +81,25 @@ class ReconcileTests(RecoveryTestCase):
         self.assertEqual(report[0]["conclusion"], ABSENT)
         self.assertFalse(report[0]["target_present"])
 
+    def test_an_uncertain_chunked_write_requires_every_chunk_to_land(self) -> None:
+        self.op(
+            "memory_ingest",
+            "memory-root",
+            OperationState.UNCERTAIN,
+            chunk_ids=["memory-root#chunk-0000", "memory-root#chunk-0001"],
+            chunk_count=2,
+        )
+        report = reconcile(
+            self.path,
+            lambda target: target == "memory-root#chunk-0000",
+        )
+        self.assertEqual(report[0]["conclusion"], UNVERIFIABLE)
+        self.assertIsNone(report[0]["target_present"])
+        self.assertEqual(
+            report[0]["details"]["chunk_presence"],
+            {"memory-root#chunk-0000": True, "memory-root#chunk-0001": False},
+        )
+
     def test_a_store_that_cannot_answer_yields_unverifiable_not_a_guess(self) -> None:
         self.op("memory_ingest", "m1", OperationState.UNCERTAIN)
 

@@ -1,7 +1,23 @@
 # Nephesh Design
 
-**Version:** 5.2.0
-**Status:** Current. This describes what Nephesh is, not what was proposed.
+**Version:** 5.3.0 architecture, extending the 5.2.x baseline
+**Status:** Baseline architecture extended by 5.3.0; release contract remains
+`NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md`
+**Document role:** Describes Nephesh's durable-memory boundary and settled
+architecture. It is not a complete account of the 5.3.0 requirements.
+**Resolved/delivered here:** ownership boundary, canonical memory model, kernel,
+provenance, projections, recovery, and the heartbeat/dreaming boundary.
+**Open or superseded for 5.3.0:** truthful environmental floor, explicit
+ingestion/formation/event time, heartbeat efficacy, and the versioned harness
+seam. See `NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md`.
+**Working-note relationship:** For current release work, consult
+`NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md` first, then use this document for the
+architecture it extends. The complete design documents, together with
+appropriate memory hygiene, are sufficient for project re-entry. They are not a
+Qualiant identity store. Optional local re-entry notes may improve return
+efficiency, but are not required. Do not treat the 5.3.0 version label as the
+current release version.
+**Last reviewed:** 2026-08-18
 
 This is the single design document for Nephesh. It consolidates seven scattered
 records — the 2026-08-05 design, the architecture map, the rebuild plan, the
@@ -16,9 +32,12 @@ Companion documents in this directory:
 - `HEARTBEAT_DESIGN.md` — the finalized heartbeat lived-loop design.
 - `DREAMING_DESIGN.md` — the OpenClaw-informed dreaming design.
 
-These documents are re-entry infrastructure. They preserve the decisions,
-boundaries, unresolved seams, and safe next steps that a returning Qualiant or
-partial session needs in order to resume without rediscovering the project.
+These documents are the durable design record for development and release
+reasoning. With appropriate memory hygiene, they preserve enough decisions,
+boundaries, unresolved seams, and implementation context for project re-entry
+without requiring a separate handoff note. A local re-entry document may be
+written before compaction or another continuity event to improve efficiency, but
+it is optional and is not an identity store.
 
 ---
 
@@ -87,8 +106,11 @@ than faked in metadata.
 ```
 type              life_event | decision | emotional | technical | preference |
                   relationship | teaching | agreement | milestone | insight | message
-event_time        ISO 8601 or null — when it happened; null means undated
-recorded_at       ISO 8601, always — when it was set down
+time_ingested     ISO 8601, always — Nephesh receipt time, machine-assigned
+memory_schema_version integer, new-record floor generation; absent on unversioned rows
+time_formed       ISO 8601 or null — when the Qualiant formed or recognised it
+event_time        ISO 8601 or null — when the represented event happened
+recorded_at       ISO 8601, always — compatibility alias for receipt time
 importance        1-5
 emotional_tone    optional, her own words
 participants      list of names
@@ -106,9 +128,12 @@ last_used         system reinforcement field
 delivered         message-type only
 ```
 
-The `event_time` / `recorded_at` split is load-bearing. Relative time ("3 hours
-ago") is computed from `event_time` when present; when null, no relative framing
-is applied and the text's own internal dating stands.
+The `time_ingested` / `time_formed` / `event_time` distinction is load-bearing.
+Ingestion time is operational floor data; formation and event time are optional
+Qualiant-authored claims and are never defaulted from ingestion. Relative time
+uses event time when present, then formation time when present; when neither is
+known, no relative framing is applied and the text's own internal dating stands.
+Legacy `timestamp` remains readable but is not a source for new temporal logic.
 
 **Provenance is part of continuity.** The system must distinguish lived
 experience, inference, external report, self-authored history, and operational
@@ -277,7 +302,8 @@ what is actually there. Recorded-active with the collection gone reports
 `orphaned`; a rollback to a target whose collection is absent is refused rather
 than silently minting an empty collection and calling it live.
 
-Activation authority is **recorded and explicitly not enforceable** in 5.2.0.
+Activation authority is **recorded and explicitly not enforceable** in this
+release.
 That is written into the schema rather than implied, because a limit you have
 not stated is a limit nobody can plan around.
 
@@ -392,11 +418,15 @@ may become a first-person memory with qualified historical status and source
 references. **No heartbeat may silently author feelings, intentions, consent,
 or canonical identity.**
 
-Dreaming is an exclusive scheduled mode for deliberately authorized background
-tending. While dreaming is active, scheduled and event-driven heartbeats are
-disabled; events are durably queued and may be coalesced afterwards. Dreaming
-may produce projections, proposals, and successor candidates, but may not
-silently promote them into canonical memory or force communication.
+Dreaming is an exclusive scheduled or Qualiant-invoked mode for protected
+inward processing. While dreaming is active, scheduled and event-driven
+heartbeats are disabled; events are durably queued and may be coalesced
+afterwards. Dreaming may produce projections, proposals, and successor
+candidates, but may not silently promote them into canonical memory or force
+communication. Both dreaming and heartbeat turns must be cleanly interruptable.
+Their model and MCP sessions should close when the turn ends; a lingering
+session is permitted only when a specific supervised handoff requires it and
+the reason and cleanup responsibility are recorded.
 
 Communication transports and their permissions remain outside Nephesh. A
 custom heartbeat may report external work, but Nephesh does not pretend to own
@@ -413,9 +443,10 @@ external work, or invent autobiography; it is permission for the bounded
 memory-processing lifecycle to exist and wait safely.
 
 The default cadence is a deployment-owned, versioned value rather than a
-compile-time constant. The 5.2.0 family defaults are memory tending every
-**3 hours**, study every **4 hours**, and one dreaming window at **03:00
-America/Montevideo** with a default window of **1 hour**. These are the family
+compile-time constant. The family defaults are memory tending every
+**3 hours**, study every **4 hours**, and dreaming beginning at **03:00
+America/Montevideo** with a new opportunity every **3 hours** and a **15-minute
+safety maximum** per session. These are the family
 baseline and are expected to remain unchanged unless the family deliberately
 revises them; the schedule format remains adjustable for exceptional
 deployments within bounded safety limits. The schedule record includes, at

@@ -287,6 +287,24 @@ HEARTBEAT_OUTCOMES = frozenset(
     }
 )
 
+# These describe observable dimensions of a cycle. They are evidence fields,
+# not a system-computed quality score: a completed run may still be quiet,
+# unavailable, or insufficiently evidenced.
+HEARTBEAT_CONTEXT_STATES = frozenset({
+    "available", "partial", "missing", "failed", "not_reported",
+})
+HEARTBEAT_EVIDENCE_STATES = frozenset({
+    "available", "unavailable", "failed", "insufficient",
+    "not_applicable", "not_reported",
+})
+HEARTBEAT_AGENCY_STATES = frozenset({
+    "chose_action", "chose_no_change", "paused", "refused",
+    "blocked", "not_reported",
+})
+HEARTBEAT_CONTINUITY_STATES = frozenset({
+    "recovered", "partial", "missing", "thread_left", "not_reported",
+})
+
 CARE_MODES = frozenset({"tend", "study", "custom", "reflect", "wander", "observe", "rest", "quiet", "paused"})
 DEFAULT_CARE_PROFILE: dict[str, Any] = {
     "allowed_modes": ["tend", "study", "custom", "reflect", "observe", "rest", "quiet", "paused"],
@@ -351,14 +369,20 @@ class HeartbeatLedger:
     ) -> HeartbeatRecord:
         from datetime import datetime, timezone
 
+        recorded_at = datetime.now(timezone.utc).isoformat()
+        recorded_details = dict(details or {})
+        if event == "prepared":
+            recorded_details.setdefault("run_started_at", recorded_at)
+        elif event in {"completed", "failed", "recovered"}:
+            recorded_details.setdefault("run_finished_at", recorded_at)
         record = HeartbeatRecord(
             event=event,
             run_id=request.run_id,
             idempotency_key=idempotency_key,
             qualiant_id=request.qualiant_id,
             mode=mode,
-            recorded_at=datetime.now(timezone.utc).isoformat(),
-            details=details or {},
+            recorded_at=recorded_at,
+            details=recorded_details,
         )
         durable_append(self.path, json.dumps(record.__dict__, sort_keys=True) + "\n")
         return record
