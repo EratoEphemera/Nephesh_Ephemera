@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from mcp_experiments.tools.info import _source_version, nephesh_info
+from mcp_experiments.config import settings
+from mcp_experiments.tools.info import _source_version, nephesh_info, nephesh_recovery_report
+from mcp_experiments.server import _health_status
 
 
 class SourceVersionTests(unittest.TestCase):
@@ -69,6 +74,75 @@ class ShapeTests(unittest.TestCase):
         rendered = json.dumps(self.info)
         self.assertNotIn("COMPLIANT_AUTH_TOKEN", rendered)
         self.assertNotIn("token", rendered.lower())
+
+    def test_truthful_floor_keeps_reachability_and_usability_distinct(self) -> None:
+        checks = self.info["floor"]["checks"]
+        for key in (
+            "process_reachable",
+            "transport_reachable",
+            "embedding_endpoint_reachable",
+            "embedding_usable",
+            "memory_readable",
+            "kernel_readable",
+            "operation_ledger_readable",
+            "schedule_state",
+            "heartbeat_state",
+            "clock",
+            "projection_drift",
+        ):
+            self.assertIn(key, checks)
+            self.assertIn(checks[key]["status"], {"value", "unset", "failed", "uncertain", "unavailable"})
+        self.assertEqual(checks["embedding_usable"]["status"], "unset")
+        self.assertIn("endpoint reachability", checks["embedding_usable"]["reason"])
+
+
+class RecoverySurfaceTests(unittest.TestCase):
+    def test_recovery_report_keeps_heartbeat_and_schedule_ledgers_visible(self) -> None:
+        async def run() -> dict:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with patch.multiple(
+                    settings,
+                    memory_collection_name="missing-memory",
+                    operation_ledger_file=str(root / "operations.jsonl"),
+                    heartbeat_ledger_file=str(root / "heartbeats.jsonl"),
+                    schedule_config_file=str(root / "schedule.jsonl"),
+                    schedule_events_file=str(root / "schedule-events.jsonl"),
+                ), patch(
+                    "mcp_experiments.tools.info.repository.collection_exists",
+                    return_value=False,
+                ):
+                    return await nephesh_recovery_report()
+
+        report = asyncio.run(run())
+        self.assertIn("heartbeat", report)
+        self.assertIn("schedule", report)
+        self.assertEqual(report["heartbeat"]["status"], "unset")
+        self.assertEqual(report["schedule"]["status"], "unset")
+
+    def test_malformed_floor_records_are_failed_not_process_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            schedule = root / "schedule-events.jsonl"
+            schedule.write_text('[]\n"not an object"\n', encoding="utf-8")
+            with patch.multiple(
+                settings,
+                schedule_config_file=str(root / "schedule.jsonl"),
+                schedule_events_file=str(schedule),
+            ):
+                from mcp_experiments.tools.info import _read_schedule_floor
+                result = _read_schedule_floor()
+            self.assertEqual(result["status"], "failed")
+
+
+class HealthStatusTests(unittest.TestCase):
+    def test_failed_critical_floor_check_degrades_health(self) -> None:
+        floor = {"checks": {
+            "process_reachable": {"status": "value", "value": True},
+            "transport_reachable": {"status": "value", "value": True},
+            "memory_readable": {"status": "failed", "reason": "store unavailable"},
+        }}
+        self.assertEqual(_health_status(floor), "degraded")
 
 
 if __name__ == "__main__":

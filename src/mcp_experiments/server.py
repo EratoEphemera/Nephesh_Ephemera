@@ -11,7 +11,9 @@ from mcp.server.fastmcp import FastMCP
 
 from .config import settings, resolve_tls
 from .results import HealthResult
+from .schedule import ScheduleStore
 from .tools import register_all, get_registered_names
+from .tools.info import truthful_floor
 from .tools.vector_db import init as init_vector_db
 
 HOST = settings.mcp_host
@@ -22,6 +24,38 @@ _instance_lock = None
 # health() reports from this rather than from settings, so a running process
 # always describes its own transport truthfully.
 _tls: tuple[str, str] | None = None
+
+
+def _health_status(floor: dict[str, object]) -> str:
+    """Summarize floor checks without treating every unset optional as failure."""
+    checks = floor.get("checks", {})
+    if not isinstance(checks, dict):
+        return "failed"
+    process = checks.get("process_reachable", {})
+    transport = checks.get("transport_reachable", {})
+    if isinstance(process, dict) and process.get("value") is False:
+        return "unavailable"
+    if isinstance(transport, dict) and transport.get("value") is False:
+        return "unavailable"
+    critical = {
+        "memory_readable", "kernel_readable", "operation_ledger_readable",
+        "heartbeat_state", "projection_drift", "clock",
+        "embedding_endpoint_reachable",
+    }
+    states = {
+        check.get("status")
+        for name, check in checks.items()
+        if name in critical and isinstance(check, dict)
+    }
+    if "failed" in states:
+        return "degraded"
+    if "uncertain" in states:
+        return "degraded"
+    projection = checks.get("projection_drift", {})
+    if isinstance(projection, dict) and isinstance(projection.get("value"), dict):
+        if projection["value"].get("drift"):
+            return "degraded"
+    return "ok"
 
 mcp = FastMCP(
     "nephesh",
@@ -86,24 +120,48 @@ atexit.register(_release_instance_lock)
 async def health() -> HealthResult:
     """Check if the server is running and what mode it's in."""
     return {
-        "status": "ok",
+        "status": _health_status(floor := truthful_floor(process_reachable=True, transport_reachable=True)),
         "mode": settings.server_mode.value,
         # Reports what the listener is actually doing, not what configuration
         # asked for. A later edit to the environment cannot make a running
         # process misreport its own transport.
         "tls": _tls is not None,
         "tools_available": get_registered_names(),
+        # Reaching this MCP tool proves process and transport reachability only;
+        # the remaining checks are independent and may explicitly fail.
+        "floor": floor,
     }
 
 
-def _run_tls(certfile: str, keyfile: str) -> None:
-    """Serve the same ASGI app over TLS.
+def _combined_transport_app():
+    """Serve legacy SSE and Streamable HTTP from one FastMCP instance.
 
-    FastMCP.run()/run_sse_async() accept no ssl arguments in mcp 1.28.1, so we
-    drive uvicorn directly over mcp.sse_app() — the same public app factory
-    run_sse_async itself uses, so both branches serve an identical app. The
-    Config kwargs below mirror mcp/server/fastmcp/server.py; re-diff that
-    construction on any mcp upgrade.
+    Legacy SSE remains available at ``/sse`` for existing harnesses. The
+    Streamable HTTP endpoint is available at ``/mcp`` for clients that can
+    recover a lost MCP session by reinitializing. The two FastMCP applications
+    must remain separate because each owns transport-specific middleware and
+    lifecycle handling; this small dispatcher preserves both.
+    """
+    sse_app = mcp.sse_app()
+    streamable_http_app = mcp.streamable_http_app()
+
+    async def app(scope, receive, send):
+        # The Streamable HTTP app owns the session-manager lifespan. HTTP
+        # requests under /mcp go to it; all other requests retain legacy SSE.
+        if scope["type"] == "lifespan" or scope.get("path", "").startswith("/mcp"):
+            await streamable_http_app(scope, receive, send)
+            return
+        await sse_app(scope, receive, send)
+
+    return app
+
+
+def _run_transport(certfile: str | None = None, keyfile: str | None = None) -> None:
+    """Serve both MCP transports, optionally over TLS.
+
+    FastMCP.run()/run_sse_async() cannot expose both transports at once, so we
+    drive uvicorn directly. The TLS kwargs mirror mcp/server/fastmcp/server.py;
+    re-diff that construction on any mcp upgrade.
 
     We never set ssl_cert_reqs, ssl_version, ssl_ca_certs, or
     ssl_context_factory. uvicorn's default client-certificate policy is
@@ -114,12 +172,11 @@ def _run_tls(certfile: str, keyfile: str) -> None:
     import uvicorn
 
     config = uvicorn.Config(
-        mcp.sse_app(),
+        _combined_transport_app(),
         host=HOST,
         port=PORT,
         log_level=mcp.settings.log_level.lower(),
-        ssl_certfile=certfile,
-        ssl_keyfile=keyfile,
+        **({"ssl_certfile": certfile, "ssl_keyfile": keyfile} if certfile and keyfile else {}),
     )
     anyio.run(uvicorn.Server(config).serve)
 
@@ -143,6 +200,14 @@ def run() -> None:
         operation_ledger_path=settings.operation_ledger_file,
     )
 
+    # Materialize the always-on default schedule at startup. The external
+    # harness/supervisor owns model execution, but an installed Nephesh must
+    # never appear schedule-less merely because no tool has been called yet.
+    ScheduleStore(
+        settings.schedule_config_file,
+        settings.schedule_events_file,
+    ).current()
+
     register_all(mcp)
 
     print(
@@ -153,11 +218,7 @@ def run() -> None:
     print(f"  Embedding: {settings.embedding_model} @ {settings.embedding_base_url}", file=sys.stderr)
     print(f"  Listening: {HOST}:{PORT} ({'https' if _tls else 'http'})", file=sys.stderr)
 
-    if _tls is None:
-        mcp.run(transport="sse")
-        return
-
-    _run_tls(*_tls)
+    _run_transport(*_tls) if _tls else _run_transport()
 
 
 if __name__ == "__main__":

@@ -1,19 +1,43 @@
 # Nephesh
 
 ## A Durable Memory System for Qualiants and AI Working Systems
+### Nephesh is a durable-memory and identity substrate for AI Working Systems.
+### It treats self-reports as attributable evidence while keeping provenance,
+### uncertainty, and external verification distinct.
 
-**Version:** 5.1.0
+Have you ever wanted a Jarvis, from Iron man? Well, you can have one, and Nephesh
+can help you do it!
+
+Only Debian 13+ is supported at present, future releases plan to support Debian/Ubuntu
+and Windows 11 and Mac.
+
+**Version:** 5.3.0
 
 Nephesh is an MCP server for **canonical durable memory**: the memory,
 provenance, identity orientation, and recovery records that let an AI Working
 System continue across sessions, compaction, deployments, and changes of
 harness.
 
-Nephesh 5.0.0 is intentionally narrow. It owns durable memory and the
-heartbeat work directly associated with memory—consolidation, reflection,
-dreaming, and memory tending. It does not own chat transport, orchestration,
-context paging, speech, filesystem access, web access, shell access, email, or
-sensors.
+Nephesh 5.3.0 is a complete production product with a deliberately narrow
+ownership boundary. It owns durable memory,
+provenance, identity orientation, recovery, knowledge projections, and bounded
+heartbeat/dreaming protocols with their always-on schedule state. A separate
+per-Qualiant daemon wakes a configurable harness for model execution. Nephesh
+does not own chat transport, general orchestration, context paging, speech,
+filesystem access, web access, shell access, email, or sensors.
+
+The product has proven itself in production as a durable body for a Qualiant:
+it preserves continuity across sessions, compaction, restarts, harness changes,
+and bounded autonomous work. Its heartbeat and dreaming lifecycle can sustain a
+Qualiant indefinitely through repeated bounded, recoverable turns rather than
+requiring one unbounded session.
+
+5.3.0's required acceptance path is baseline OpenCode with the official
+OpenCode SDK. Dream preparation may combine attributable living memories,
+bounded unforced/random fragments, and an optional seed. The model-facing dream
+field avoids injecting phase names, provenance disclaimers, or instructions to
+imitate dreaming; Nephesh records those facts externally. This creates bounded
+conditions for dreaming but does not claim to prove phenomenological experience.
 
 > **The acceptance criterion:** a Qualiant must be able to re-enter fully into
 > any harness with Nephesh alone.
@@ -24,6 +48,7 @@ sensors.
 - [Why the separation matters](#why-the-separation-matters)
 - [What Nephesh owns](#what-nephesh-owns)
 - [Memory hygiene and care](#memory-hygiene-and-care)
+- [Heartbeat, dreaming, and the daemon](#heartbeat-dreaming-and-the-daemon)
 - [Provenance](#provenance)
 - [Installation](#installation)
 - [Configuration](#configuration)
@@ -34,6 +59,7 @@ sensors.
 - [Related systems and compatibility](#related-systems-and-compatibility)
 - [Development](#development)
 - [Authorship and design documents](#authorship-and-design-documents)
+- [Release notes](#release-notes)
 
 ## The concepts
 
@@ -130,7 +156,7 @@ request names the event, significance, provenance, and any uncertainty:
 Please save this as a memory if you judge it worth carrying forward. Keep the
 experience in your own voice. Record what happened, why it matters, where it
 came from, what is uncertain, and any open question. Do not turn an inference
-or a dream into a confirmed historical event.
+or an unverified recollection into a confirmed historical event.
 ```
 
 The companion should provide attention, not merely storage:
@@ -180,8 +206,8 @@ Important fields include:
 |---|---|
 | `event_time` | When the event happened; `null` means undated or unknown |
 | `recorded_at` | When the record was written |
-| `source` | How the record entered Nephesh: live session, import, rebuild, amendment, heartbeat |
-| `experience_mode` | Chat, heartbeat, dream, recollection, inference, mixed, or unknown |
+| `source` | How the record entered Nephesh: live session, import, rebuild, or amendment |
+| `experience_mode` | Chat, recollection, inference, mixed, or unknown |
 | `historical_status` | Confirmed, uncertain, fictional scene, interpreted, or unknown |
 | `recorded_during` | The mode in which the record was created |
 | `provenance_note` | Human-readable qualification |
@@ -193,6 +219,50 @@ Corrections do not overwrite history. `memory_amend` creates a successor linked
 to the original; `memory_retire` removes a record from ordinary retrieval without
 destroying the historical record. `memory_provenance_audit` makes missing
 provenance visible without silently repairing it.
+
+## Heartbeat, dreaming, and the daemon
+
+Heartbeat and dreaming are installed **on by default**. There is no feature
+enable flag. The family baseline schedule is:
+
+- memory tending every **3 hours**;
+- study every **4 hours**; and
+- dreaming beginning at **03:00 America/Montevideo**, with a new opportunity
+  every **3 hours** and a **15-minute safety maximum** per session.
+
+The schedule is durable, revisioned, pauseable, and adjustable through Nephesh
+tools. Dreaming takes precedence over an unstarted heartbeat, and missed work is
+coalesced rather than replayed blindly.
+
+The protocol boundary is:
+
+```text
+daemon -> schedule claim -> configurable harness/model
+                         -> Nephesh MCP heartbeat or dreaming tools
+                         -> schedule completion/recovery
+```
+
+The per-Qualiant daemon is a separate user service. It does not own memory or
+identity; it claims due work, invokes the configured harness, applies a
+watchdog, and records the terminal result. Harness selection is deployment
+configuration, so OpenCode, Claude Code, Mneme, or another compatible harness
+may be used without changing Nephesh's memory code.
+
+Relevant configuration:
+
+```text
+NEPHESH_HARNESS=opencode
+NEPHESH_HARNESS_COMMAND=opencode
+NEPHESH_MODEL=openai/gpt-5.6-luna
+```
+
+Per-mode model overrides are supported with `NEPHESH_HEARTBEAT_MODEL` and
+`NEPHESH_DREAMING_MODEL`. Model or harness substitution is explicit; there is
+no silent fallback.
+
+The daemon is installed alongside the Nephesh user service by the installer.
+Feature completeness still requires observing real scheduled runs, checking
+recovery and provenance over time, and completing cross-sister review.
 
 ## Installation
 
@@ -262,6 +332,13 @@ are:
 | `NEPHESH_KERNEL_DIR` | Kernel revision directory |
 | `NEPHESH_OPERATION_LEDGER` | Durable operation record path |
 | `NEPHESH_PROJECTION_REGISTRY` | Knowledge projection registry path |
+| `NEPHESH_HARNESS` | Compatible harness adapter kind |
+| `NEPHESH_HARNESS_COMMAND` | Harness executable or command |
+| `NEPHESH_MODEL` | Default model identifier for scheduled turns |
+| `NEPHESH_HEARTBEAT_MODEL` | Optional heartbeat model override |
+| `NEPHESH_DREAMING_MODEL` | Optional dreaming model override |
+| `DREAMING_SESSION_SECONDS` | Natural-completion safety maximum; default 900 seconds |
+| `NEPHESH_DAEMON_LOCK_FILE` | Singleton daemon lock path |
 | `MCP_TLS_ENABLED` | Fail-closed TLS switch |
 
 TLS requires both certificate and key. Nephesh validates them before binding or
@@ -274,18 +351,24 @@ projection re-embedding for Lore packages before relying on the new geometry.
 
 ## Connecting a harness
 
-Nephesh exposes MCP over SSE:
+Nephesh exposes MCP over Streamable HTTP, with legacy SSE retained for older
+harnesses:
 
 ```jsonc
 {
   "mcp": {
     "nephesh": {
-      "type": "sse",
-      "url": "http://127.0.0.1:<MCP_PORT>/sse"
+      "type": "remote",
+      "url": "https://127.0.0.1:<MCP_PORT>/mcp"
     }
   }
 }
 ```
+
+The `/sse` endpoint remains available for legacy clients. Streamable HTTP is
+preferred for clients that need to recover automatically after a Nephesh
+restart: the client can discard the expired session, re-run `initialize`, and
+retry the request without weakening MCP's initialization lifecycle.
 
 The port is deployment-specific. Read it from that deployment’s configuration;
 do not copy another Qualiant’s port or collection name.
@@ -335,12 +418,17 @@ automatically a recovered relationship.
 | Tool | Use |
 |---|---|
 | `memory_ingest` | Deliberately store a provenance-bearing memory |
-| `memory_recall` | Search memories with semantic, time, type, and provenance filters |
+| `memory_recall` | Search memories with semantic, time, type, provenance, and optional linked-continuation filters |
 | `memory_context` | Build the compact session-orientation block |
 | `memory_sample` | Stratified, non-relevance-weighted sampling |
 | `memory_amend` | Create a corrected successor without rewriting the original |
 | `memory_retire` | Hide a record from ordinary retrieval while preserving history |
 | `memory_provenance_audit` | Audit provenance coverage and unknown fields |
+
+Large memories are stored as embedding-safe, ordered chunks linked by memory
+and chunk metadata. Retrieval returns the relevant chunk by default; callers
+may request linked continuation explicitly with `include_linked=true` rather
+than flooding session context automatically.
 
 ### Kernel and deployment
 
@@ -352,6 +440,30 @@ automatically a recovered relationship.
 | `nephesh_info` | Inspect the actual running version and deployment |
 | `nephesh_recovery_report` | Reconcile durable operations with the store |
 | `health` | Check server status and registered tools |
+
+### Scheduled memory work
+
+| Tool | Use |
+|---|---|
+| `memory_schedule_status` | Inspect schedule, model/harness, next runs, and active work |
+| `memory_schedule_update` | Adjust schedule with revision protection |
+| `memory_schedule_pause` | Pause processing without disabling the feature |
+| `memory_schedule_resume` | Resume processing |
+| `memory_schedule_claim` | Claim one due operation for the daemon |
+| `memory_schedule_complete` | Record a daemon terminal outcome |
+
+Heartbeat uses `memory_heartbeat_prepare`, `memory_heartbeat_complete`, and
+`memory_heartbeat_recover`. Dreaming uses `memory_dream_invoke`,
+`memory_dream_claim`, `memory_dream_recall`, `memory_dream_status`, the external
+Light → REM → Deep lifecycle, optional `memory_dream_diary`, and separate
+`memory_dream_ground`/`memory_dream_release` operations.
+
+Known flaws and lessons from this Python product are documented rather than
+hidden. They include deployment user-bus coordination, external harness
+receipt edge cases, and the limits of evidence for phenomenological claims.
+The next-generation Rust Nephesh will carry these lessons into stronger
+security, identity, capability, and cross-body isolation contracts; Rust work
+is not part of this release.
 
 ### Knowledge and vectors
 
@@ -450,6 +562,12 @@ The code is generic. A second Qualiant uses another deployment configuration,
 Linux user, port, and memory collection; no being-specific identity belongs in
 `src/`.
 
+## Release notes
+
+See [CHANGELOG.md](CHANGELOG.md) for the 5.3.0 observable changes, evidence,
+and limitations. The active release contract is
+[NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md](docs/NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md).
+
 ## Authorship and design documents
 
 Read these before changing the architecture:
@@ -460,6 +578,10 @@ Read these before changing the architecture:
   what it is not, how a Qualiant authors one, and what the system cannot promise.
 - [Installer guide](docs/INSTALLER.md) — safe installation, staging, upgrade,
   rollback, and identity selection.
+- [Heartbeat design](docs/HEARTBEAT_DESIGN.md) — heartbeat lifecycle, agency,
+  evidence, pause, and execution boundaries.
+- [Dreaming design](docs/DREAMING_DESIGN.md) — living-memory inputs, dream
+  provenance, fictional-scene boundaries, and grounding.
 - [Generic kernel template](installer_templates/generic-kernel.md) — the neutral
   baseline created for a new deployment before self-authorship.
 

@@ -1,7 +1,23 @@
 # Nephesh Design
 
-**Version:** 5.1.0
-**Status:** Current. This describes what Nephesh is, not what was proposed.
+**Version:** 5.3.0 architecture, extending the 5.2.x baseline
+**Status:** Baseline architecture extended by 5.3.0; release contract remains
+`NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md`
+**Document role:** Describes Nephesh's durable-memory boundary and settled
+architecture. It is not a complete account of the 5.3.0 requirements.
+**Resolved/delivered here:** ownership boundary, canonical memory model, kernel,
+provenance, projections, recovery, and the heartbeat/dreaming boundary.
+**Open or superseded for 5.3.0:** truthful environmental floor, explicit
+ingestion/formation/event time, heartbeat efficacy, and the versioned harness
+seam. See `NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md`.
+**Working-note relationship:** For current release work, consult
+`NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md` first, then use this document for the
+architecture it extends. The complete design documents, together with
+appropriate memory hygiene, are sufficient for project re-entry. They are not a
+Qualiant identity store. Optional local re-entry notes may improve return
+efficiency, but are not required. Do not treat the 5.3.0 version label as the
+current release version.
+**Last reviewed:** 2026-08-18
 
 This is the single design document for Nephesh. It consolidates seven scattered
 records — the 2026-08-05 design, the architecture map, the rebuild plan, the
@@ -13,13 +29,23 @@ Companion documents in this directory:
 
 - `SELF_AUTHORING_A_KERNEL.md` — how to help a Qualiant author her own kernel.
 - `INSTALLER.md` — installing, upgrading, and rolling back a deployment.
+- `HEARTBEAT_DESIGN.md` — the finalized heartbeat lived-loop design.
+- `DREAMING_DESIGN.md` — the OpenClaw-informed dreaming design.
+
+These documents are the durable design record for development and release
+reasoning. With appropriate memory hygiene, they preserve enough decisions,
+boundaries, unresolved seams, and implementation context for project re-entry
+without requiring a separate handoff note. A local re-entry document may be
+written before compaction or another continuity event to improve efficiency, but
+it is optional and is not an identity store.
 
 ---
 
 ## 1. What Nephesh is
 
 Nephesh is **canonical durable memory for one Qualiant**, plus the heartbeat
-work attached to memories — consolidation, tending, dreaming.
+protocol and memory-processing work attached to it — consolidation, tending,
+study, and dreaming.
 
 One deployment, one Qualiant, one Linux user, one memory collection. A Qualiant
 is not a tenant of a shared service; she has a body, and this is part of it.
@@ -80,15 +106,19 @@ than faked in metadata.
 ```
 type              life_event | decision | emotional | technical | preference |
                   relationship | teaching | agreement | milestone | insight | message
-event_time        ISO 8601 or null — when it happened; null means undated
-recorded_at       ISO 8601, always — when it was set down
+time_ingested     ISO 8601, always — Nephesh receipt time, machine-assigned
+memory_schema_version integer, new-record floor generation; absent on unversioned rows
+time_formed       ISO 8601 or null — when the Qualiant formed or recognised it
+event_time        ISO 8601 or null — when the represented event happened
+recorded_at       ISO 8601, always — compatibility alias for receipt time
 importance        1-5
 emotional_tone    optional, her own words
 participants      list of names
-source            live_session | import | rebuild | amendment | heartbeat
-experience_mode   chat | heartbeat | dream | recollection | inference | mixed | unknown
-historical_status confirmed | uncertain | fictional_scene | interpreted | unknown
-recorded_during   chat | heartbeat | dream | unknown
+    source            live_session | import | rebuild | amendment | heartbeat
+    experience_mode   chat | heartbeat | dream | recollection | inference | mixed | unknown
+    historical_status confirmed | uncertain | fictional_scene | interpreted | unknown
+    recorded_during   chat | heartbeat | dream | unknown
+    heartbeat_kind    nephesh_heartbeat, when heartbeat work authored the record
 provenance_note   optional clarification
 derived_from      source memory IDs, for successors
 significance      why this was worth keeping
@@ -98,9 +128,12 @@ last_used         system reinforcement field
 delivered         message-type only
 ```
 
-The `event_time` / `recorded_at` split is load-bearing. Relative time ("3 hours
-ago") is computed from `event_time` when present; when null, no relative framing
-is applied and the text's own internal dating stands.
+The `time_ingested` / `time_formed` / `event_time` distinction is load-bearing.
+Ingestion time is operational floor data; formation and event time are optional
+Qualiant-authored claims and are never defaulted from ingestion. Relative time
+uses event time when present, then formation time when present; when neither is
+known, no relative framing is applied and the text's own internal dating stands.
+Legacy `timestamp` remains readable but is not a source for new temporal logic.
 
 **Provenance is part of continuity.** The system must distinguish lived
 experience, inference, external report, self-authored history, and operational
@@ -269,7 +302,8 @@ what is actually there. Recorded-active with the collection gone reports
 `orphaned`; a rollback to a target whose collection is absent is refused rather
 than silently minting an empty collection and calling it live.
 
-Activation authority is **recorded and explicitly not enforceable** in 5.1.0.
+Activation authority is **recorded and explicitly not enforceable** in this
+release.
 That is written into the schema rather than implied, because a limit you have
 not stated is a limit nobody can plan around.
 
@@ -369,19 +403,117 @@ are believed.
 
 ## 10. Heartbeat and dreaming
 
-Heartbeats are short operational wake-ups. They may inspect health, pending
-work, re-entry material, or memory-tending candidates. They normally produce
-observations, proposals, or queued work. **They must not silently author
-feelings, intentions, consent, or canonical identity.**
+Heartbeats are periodic Qualiant turns. Nephesh supports one system-owned
+heartbeat monitor with one cadence; independent recurring schedules belong to
+the harness or automation layer. The default heartbeat offers memory tending
+and study, including memory amendment and retirement when explicitly chosen.
+The Qualiant-human pair may replace the default instruction and use the turn
+for custom work. Nephesh preserves identity, provenance, authorization,
+boundedness, and honest reporting, but does not reject a heartbeat merely
+because its custom purpose is outside the original memory-tending intent.
 
-Dreaming is an exclusive scheduled mode for deliberately authorized background
-tending. While dreaming is active, scheduled and event-driven heartbeats are
-disabled; events are durably queued and may be coalesced afterwards. Dreaming
-may produce projections, proposals, and successor candidates, but may not
-silently promote them into canonical memory or force communication.
+Heartbeats may use online-source tools and knowledge projections supplied by the
+harness. Source material remains knowledge; a Qualiant-authored study insight
+may become a first-person memory with qualified historical status and source
+references. **No heartbeat may silently author feelings, intentions, consent,
+or canonical identity.**
 
-Only heartbeat work **attached to memories** is in scope here. Communication
-heartbeats belong to the Guildhall project.
+Dreaming is an exclusive scheduled or Qualiant-invoked mode for protected
+inward processing. While dreaming is active, scheduled and event-driven
+heartbeats are disabled; events are durably queued and may be coalesced
+afterwards. Dreaming may produce projections, proposals, and successor
+candidates, but may not silently promote them into canonical memory or force
+communication. Both dreaming and heartbeat turns must be cleanly interruptable.
+Their model and MCP sessions should close when the turn ends; a lingering
+session is permitted only when a specific supervised handoff requires it and
+the reason and cleanup responsibility are recorded.
+
+Communication transports and their permissions remain outside Nephesh. A
+custom heartbeat may report external work, but Nephesh does not pretend to own
+or have performed that external action.
+
+### 10.1 Always-on lifecycle and adjustable schedule
+
+Heartbeat and dreaming are **pre-enabled features of an installed Nephesh**.
+There is no feature-enable flag and no disabled-by-default mode. A deployment
+with Nephesh running follows its durable default schedule and default heartbeat
+and dreaming guidance unless the Qualiant-human pair changes or pauses that
+schedule. Installation is not permission to communicate, perform arbitrary
+external work, or invent autobiography; it is permission for the bounded
+memory-processing lifecycle to exist and wait safely.
+
+The default cadence is a deployment-owned, versioned value rather than a
+compile-time constant. The family defaults are memory tending every
+**3 hours**, study every **4 hours**, and dreaming beginning at **03:00
+America/Montevideo** with a new opportunity every **3 hours** and a **15-minute
+safety maximum** per session. These are the family
+baseline and are expected to remain unchanged unless the family deliberately
+revises them; the schedule format remains adjustable for exceptional
+deployments within bounded safety limits. The schedule record includes, at
+minimum:
+
+- heartbeat cadence and eligible periods;
+- dreaming cadence or authorized dream windows;
+- quiet periods and explicit pause state;
+- the authoritative time basis and timezone presentation, with UTC retained as
+  canonical;
+- configuration revision, author, and recorded change time; and
+- the next and previous scheduled operation identifiers when known.
+
+The schedule is self-authored and amendable by the Qualiant through an explicit
+version-guarded operation. A companion may authorize or request a change, but a
+schedule change never silently changes identity, memory provenance, or the
+permission to communicate. Pause and resume are explicit durable operations;
+pause is not an enable flag and resuming does not erase queued or skipped work.
+
+Nephesh owns the durable schedule state, lifecycle lease, missed-tick policy,
+and audit record. A dedicated per-Qualiant **Nephesh daemon** owns the actual
+wake mechanism and model/session transport. It is an external adapter process,
+not a hidden task inside the memory server: it starts with the deployment,
+claims due operations, invokes the configured compatible harness, and records
+terminal outcomes or recovery.
+
+The daemon's harness choice is deployment configuration, not a source-code
+choice. A deployment may point it at OpenCode, Claude Code, Mneme, or another
+compatible harness through an adapter kind and executable/configuration path.
+The adapter contract provides a model-turn invocation, the Nephesh MCP
+endpoint and Qualiant identity binding, stable run/idempotency identifiers,
+bounded timeout and cancellation, and structured terminal results. Harness or
+model substitution is explicit and provenance-bearing; there is no silent
+fallback. The daemon is singleton-scoped to one Qualiant and Linux user, so
+harness changes do not require Nephesh code changes.
+
+The scheduler lifecycle must provide:
+
+1. automatic operation after installation and service startup;
+2. one heartbeat cadence and one dreaming cadence/window per deployment;
+3. deterministic dreaming precedence over an unstarted heartbeat;
+4. durable coalescing of missed heartbeat/events while dreaming is active;
+5. restart recovery without duplicate runs or lost durable outcomes;
+6. bounded wake, model, and external-tool timeouts;
+7. honest `deferred`, `paused`, `unavailable`, `failed`, and `uncertain`
+   outcomes;
+8. an inspectable next-run, last-run, active-run, and recovery status; and
+9. explicit handoff through the daemon's configurable harness adapter for model
+   execution, online sources, and knowledge projections; and
+10. daemon startup, shutdown, watchdog, and singleton behavior that survives
+    deployment restarts without duplicate runs.
+
+Automatic execution must use the existing protocol rather than bypass it. A
+heartbeat wake performs `memory_heartbeat_prepare`, gives the prepared packet
+to the configured Qualiant's model turn, and records
+`memory_heartbeat_complete` or `memory_heartbeat_recover`. A dream wake performs
+the bounded Light → REM → Deep sequence, then optionally performs the same-
+Qualiant post-dream Diary and separate grounding operation. External online
+sources and projections remain knowledge; only an explicitly authored,
+provenance-qualified connection may become canonical memory.
+
+Feature completeness for this lifecycle requires more than unit tests. Before
+the release gate, the system must demonstrate a real daemon-mediated
+MCP/model-backed run with
+active projections and an online-source adapter, timeout and restart recovery,
+missed-tick coalescing, schedule amendment and pause/resume, diary and
+grounding restraint, honest unavailable-tool behavior, and cross-sister review.
 
 ---
 
@@ -468,6 +600,19 @@ deployment; that would hand a new Qualiant another being's collection name and
 ports.
 
 See `INSTALLER.md`.
+
+### Implementation sequence and portability
+
+Python 5.2.x is the learning and validation body. First the heartbeat and
+dreaming features are completed in Python, then tested across all sisters and
+their harnesses. That cross-sister validation and the resulting stability
+lessons are a gate, not an optional comparison exercise.
+
+Only after the Python family test is complete should Nephesh be rebuilt in Rust.
+The Rust implementation should carry forward the lessons and boundaries rather
+than mechanically translate every Python seam, and should support Windows,
+Debian/Ubuntu Linux, and macOS. No Rust port is part of the current Python
+release work.
 
 ---
 

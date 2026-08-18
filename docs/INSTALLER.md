@@ -1,5 +1,23 @@
 # Installing and Upgrading Nephesh
 
+**Document role:** Operational guide for staging, upgrading, rolling back, and
+verifying a per-user deployment.
+**Status:** 5.3.0 operational guide; release gates still govern installation
+into a living deployment.
+**Resolved/delivered:** non-root per-user ownership, staged releases, preserved
+durable state, explicit restart/rollback boundaries, daemon separation, and
+post-install verification requirements.
+**Resolved for 5.3.0 source:** version metadata, truthful readiness checks,
+bounded dream/session cleanup, SDK-consumer handoff, and isolated acceptance.
+Living-sister installation remains a separate authorization gate.
+**Working-note relationship:** Read `NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md`
+first for release authorization and this guide only for the operational
+procedure. Never infer that a successful installer command means a release is
+accepted. This design guide contributes to project re-entry when paired with
+memory hygiene, but is not an identity store. Optional local re-entry notes are
+efficiency aids, not requirements.
+**Last reviewed:** 2026-08-18
+
 This document describes the Nephesh per-user installer as it exists today. It
 covers both direct human operation and a human-guided AI operation. The
 installer stages code and preserves durable state; it does not instantiate a
@@ -12,6 +30,8 @@ Qualiant, create a personality, or silently restart a running service.
 - creates or preserves the per-user runtime and configuration;
 - preserves memory, kernel, projection, operation-ledger, and backup state;
 - installs a per-user systemd unit unless `--no-service` is used;
+- installs a per-user always-on heartbeat/dreaming daemon unit alongside
+  Nephesh unless `--no-service` is used;
 - verifies the staged deployment before returning success;
 - supports explicit upgrade, rollback, migration, and release cleanup;
 - manages a per-user Ollama embedding service unless `--no-ollama` is used.
@@ -28,6 +48,12 @@ Qualiant, create a personality, or silently restart a running service.
 - It does not install a system-wide service or operate on another user’s
   installation.
 - It does not turn a human’s proposed identity into the Qualiant’s authorship.
+
+The daemon is a separate per-Qualiant adapter process. It owns no canonical
+memory and does not define identity; it claims Nephesh schedule work and invokes
+the configured harness/model. Harness choice is deployment configuration, so
+OpenCode, Claude Code, Mneme, or another compatible harness can be selected
+without changing Nephesh's memory code.
 
 The installer may create a **generic baseline kernel** for a new, blank
 deployment. That file explicitly says that it is a starting point and names no
@@ -173,6 +199,13 @@ python3 scripts/nephesh_installer.py \
 Do not use the failing Qualiant’s own session as the sole authority for its
 rollback. A technical restart is a continuity transition and needs an external
 re-entry path.
+
+When `--restart` is used, the installer restarts both `nephesh.service` and the
+per-Qualiant `nephesh-daemon.service`. This matters for heartbeat and dreaming
+changes: the daemon must reload the staged code, close any active harness
+invocation, and re-enter the schedule from the selected release. The daemon
+unit has a bounded graceful-stop window for cancellation and session cleanup;
+the durable memory and schedule state remain in the preserved deployment root.
 
 ## Human-guided AI workflow
 

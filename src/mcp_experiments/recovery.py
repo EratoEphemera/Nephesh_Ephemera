@@ -116,8 +116,34 @@ def reconcile(
             conclusion = UNVERIFIABLE
         else:
             try:
-                present = row_exists(target)
-                conclusion = LANDED if present else ABSENT
+                chunk_ids = record.get("details", {}).get("chunk_ids")
+                if isinstance(chunk_ids, list) and chunk_ids:
+                    chunk_presence = {
+                        chunk_id: bool(row_exists(str(chunk_id)))
+                        for chunk_id in chunk_ids
+                    }
+                    present_count = sum(chunk_presence.values())
+                    present = (
+                        True
+                        if present_count == len(chunk_presence)
+                        else False if present_count == 0 else None
+                    )
+                    if present_count == 0:
+                        conclusion = ABSENT
+                    elif present_count == len(chunk_presence):
+                        conclusion = LANDED
+                    else:
+                        conclusion = UNVERIFIABLE
+                    record = {
+                        **record,
+                        "details": {
+                            **record.get("details", {}),
+                            "chunk_presence": chunk_presence,
+                        },
+                    }
+                else:
+                    present = row_exists(target)
+                    conclusion = LANDED if present else ABSENT
             except Exception as exc:  # a store that cannot answer must not be guessed at
                 present = None
                 conclusion = UNVERIFIABLE

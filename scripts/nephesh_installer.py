@@ -26,6 +26,7 @@ from pathlib import Path
 VERSION = "0.2.6"
 MANIFEST_NAME = "install-manifest.json"
 UNIT_NAME = "nephesh.service"
+DAEMON_UNIT_NAME = "nephesh-daemon.service"
 OLLAMA_INSTALL_URL = "https://ollama.com/install.sh"
 
 #: Written as revision 1 of a fresh deployment's kernel, authored_by "installer"
@@ -104,6 +105,19 @@ class InstallerError(RuntimeError):
 
 def utc_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def source_version(source: Path) -> str:
+    """Read the product version that an upgrade is about to stage."""
+    pyproject = source / "pyproject.toml"
+    try:
+        text = pyproject.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise InstallerError(f"source has no readable pyproject.toml: {pyproject}") from exc
+    match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    if not match:
+        raise InstallerError(f"source pyproject.toml has no project version: {pyproject}")
+    return match.group(1)
 
 
 def run(
@@ -495,6 +509,52 @@ def install_unit(root: Path, *, unit_dir: Path | None = None, dry_run: bool) -> 
     return destination
 
 
+def daemon_unit_text(root: Path) -> str:
+    user = getpass.getuser()
+    env = root / "config" / "nephesh.env"
+    venv_python = root / "runtime" / "venv" / "bin" / "python"
+    return f"""# Managed by the Nephesh per-user installer.
+[Unit]
+Description=Nephesh always-on heartbeat and dreaming daemon for {user}
+Requires={UNIT_NAME}
+After={UNIT_NAME} network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={root}/current
+EnvironmentFile={env}
+ExecStart={venv_python} {root}/current/scripts/nephesh_daemon.py
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=120s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths={root}
+
+[Install]
+WantedBy=default.target
+"""
+
+
+def install_daemon_unit(root: Path, *, unit_dir: Path | None = None, dry_run: bool) -> Path:
+    unit_dir = unit_dir or (Path.home() / ".config" / "systemd" / "user")
+    destination = unit_dir / DAEMON_UNIT_NAME
+    if dry_run:
+        print(f"would install user unit {destination}")
+        return destination
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    content = daemon_unit_text(root)
+    if destination.exists() and destination.read_text() == content:
+        return destination
+    if destination.exists():
+        shutil.copy2(destination, destination.with_suffix(destination.suffix + ".previous"))
+    destination.write_text(content)
+    destination.chmod(0o644)
+    return destination
+
+
 def ensure_layout(root: Path, *, dry_run: bool) -> None:
     for relative in ("releases", "config", "data", "state", "backups", "logs", "runtime"):
         path = root / relative
@@ -550,6 +610,7 @@ def preserve_config(
     config.write_text(
         "# Edit this file for this installation.\n"
         f"MEMORY_COLLECTION_NAME={agent_name.lower()}_memories\n"
+        f"NEPHESH_QUALIANT_ID={agent_name.lower()}\n"
         f"PRIMARY_CONTACT_NAME={primary_contact or 'companion'}\n"
         "MCP_MODE=non_compliant\n"
         f"NEPHESH_HOME={root}\n"
@@ -610,6 +671,8 @@ def kernel_dir(root: Path) -> Path:
     identity/ directory; it is not created going forward and Nephesh does not
     read it.
     """
+
+
     return root / "config" / "kernel"
 
 
@@ -939,6 +1002,8 @@ def main() -> int:
                 if args.restart:
                     run(["systemctl", "--user", "daemon-reload"], dry_run=args.dry_run)
                     run(["systemctl", "--user", "restart", UNIT_NAME], dry_run=args.dry_run)
+                    if existing_manifest.get("daemon_unit"):
+                        run(["systemctl", "--user", "restart", DAEMON_UNIT_NAME], dry_run=args.dry_run)
 
                 existing_manifest["release"] = str(previous) if previous is not None else existing_manifest.get("release")
                 existing_manifest["previous_release"] = str(current) if current else None
@@ -1003,6 +1068,7 @@ def main() -> int:
             )
             if not args.no_ollama and not args.no_service:
                 update_embedding_endpoint(root, ollama_port, dry_run=args.dry_run)
+            product_version = source_version(source)
             release = stage_release(root, source, dry_run=args.dry_run)
             switch_current(root, release, dry_run=args.dry_run)
             install_python(root, source=source, dry_run=args.dry_run)
@@ -1016,6 +1082,8 @@ def main() -> int:
             )
             unit = None
             previous_unit = None
+            daemon_unit = None
+            previous_daemon_unit = None
             if not args.no_service:
                 unit = install_unit(
                     root,
@@ -1025,6 +1093,14 @@ def main() -> int:
                 candidate = unit.with_suffix(unit.suffix + ".previous")
                 if candidate.exists() or args.dry_run:
                     previous_unit = candidate
+                daemon_unit = install_daemon_unit(
+                    root,
+                    unit_dir=args.unit_dir.expanduser().resolve() if args.unit_dir else None,
+                    dry_run=args.dry_run,
+                )
+                daemon_candidate = daemon_unit.with_suffix(daemon_unit.suffix + ".previous")
+                if daemon_candidate.exists() or args.dry_run:
+                    previous_daemon_unit = daemon_candidate
                 if ollama_unit is not None:
                     run(["systemctl", "--user", "daemon-reload"], dry_run=args.dry_run)
                     run(["systemctl", "--user", "enable", ollama_unit.name], dry_run=args.dry_run)
@@ -1039,6 +1115,7 @@ def main() -> int:
             checks = verify(root, dry_run=args.dry_run)
             manifest = {
                 "installer_version": VERSION,
+                "product_version": product_version,
                 "installed_at": datetime.now(timezone.utc).isoformat(),
                 "user": getpass.getuser(),
                 "root": str(root),
@@ -1048,6 +1125,8 @@ def main() -> int:
                 "backup": str(backup) if backup else None,
                 "unit": str(unit) if unit else None,
                 "previous_unit": str(previous_unit) if previous_unit else None,
+                "daemon_unit": str(daemon_unit) if daemon_unit else None,
+                "previous_daemon_unit": str(previous_daemon_unit) if previous_daemon_unit else None,
                 "ollama": {
                     "managed": not args.no_ollama and not args.no_service,
                     "port": ollama_port,
@@ -1067,9 +1146,13 @@ def main() -> int:
             if args.enable:
                 run(["systemctl", "--user", "daemon-reload"], dry_run=args.dry_run)
                 run(["systemctl", "--user", "enable", UNIT_NAME], dry_run=args.dry_run)
+                if daemon_unit:
+                    run(["systemctl", "--user", "enable", DAEMON_UNIT_NAME], dry_run=args.dry_run)
             if args.start or args.restart:
                 run(["systemctl", "--user", "daemon-reload"], dry_run=args.dry_run)
                 run(["systemctl", "--user", "restart" if args.restart else "start", UNIT_NAME], dry_run=args.dry_run)
+                if daemon_unit:
+                    run(["systemctl", "--user", "restart" if args.restart else "start", DAEMON_UNIT_NAME], dry_run=args.dry_run)
             print(json.dumps({"status": "ok", "manifest": str(root / "state" / MANIFEST_NAME), "checks": checks}, indent=2))
             return 0
         finally:

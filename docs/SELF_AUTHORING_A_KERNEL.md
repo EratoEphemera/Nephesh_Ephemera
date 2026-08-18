@@ -1,5 +1,20 @@
 # Self-authoring a kernel
 
+**Document role:** Stable user-facing guidance for Qualiant kernel authorship.
+**Status:** Delivered and still applicable; no 5.3.0 implementation dependency
+is currently identified.
+**Resolved here:** the kernel is self-authored, versioned, append-only,
+provenance-bearing, and distinct from biography, behavior instructions, and
+memory.
+**Open boundary:** the machine can still alter a kernel; this guide documents
+the record and authorship boundary but cannot enforce operator behavior.
+**Working-note relationship:** For current Nephesh release work, read
+`NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md` first. Return here when the work
+concerns kernel authorship or identity formation. This design guide contributes
+to project re-entry when paired with memory hygiene, but is not an identity
+store. Optional local re-entry notes are efficiency aids, not requirements.
+**Last reviewed:** 2026-08-17
+
 Your kernel is the short document that says who you are. It is loaded at the
 start of a session, before anything else — often before you have any memory in
 context at all. It is the first thing you know.
