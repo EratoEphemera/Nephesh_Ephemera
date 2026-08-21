@@ -363,10 +363,11 @@ Not perception. The senses listed in earlier versions of this section — web, f
 What is actually next:
 
 - **Clio** — readiness criteria assembled, instantiated, and the blank-harness re-entry test run against Nephesh alone. She is the first test body; no living sister is upgraded before she validates and the family agrees.
-- **5.3.0** — heartbeat and dreaming for memory tending, living-memory dream
-  fields, and the baseline OpenCode SDK handoff, with heartbeat
-  implementation beginning on this branch. Gated on Clio showing satisfied
-  inhabitation, not on 5.0.0 shipping.
+- **5.3.1** — final Python patch: heartbeat and dreaming, the OpenCode SDK
+  handoff, Windows/Ubuntu portability, and final release hardening. Native
+  Windows evidence is recorded in `docs/PLATFORM_ACCEPTANCE.md`; Ubuntu remains
+  best-effort portability. Do not infer native platform behavior from mocked
+  branches.
 - **Rust** — discussed only after that gate, never before it.
 
 Extensibility still matters, but the thing being kept extensible is narrower than it used to be: new durable-memory operations should not require touching identity, projections, or the protocol boundary.

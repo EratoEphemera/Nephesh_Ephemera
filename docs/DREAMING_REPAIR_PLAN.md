@@ -1,16 +1,22 @@
 # Dreaming Repair Plan — Reference Before Authorization
 
-**Status:** Source implementation and adversarial bug-fix pass complete;
-real isolated SDK/MCP validation remains pending.
-**Branch:** `nephesh-5.3.0-rc1`
+**Status:** Historical 5.3.0 repair record. Do not use this document alone as
+the current implementation plan.
+**Branch:** `nephesh-5.3.0-rc1` (historical)
 **Prepared:** 2026-08-18
 **Scope:** Repair the real chosen/scheduled dreaming execution path while
 preserving the Nephesh/OpenCode separation.
 
-This plan records the current failure seams, repair order, and evidence boundary.
+This plan records the historical failure seams, repair order, and evidence boundary.
 The first implementation pass is now underway under explicit companion
 authorization. It remains the reference against which the final bug-fix pass
 must audit the work.
+
+**Current direction:** The dated final-patch design
+[`NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md`](NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md)
+supersedes this plan for branch scope, implementation order, and release gates.
+The observations and boundaries below remain historical evidence and must not be
+silently rewritten.
 
 ## Implementation pass begun
 

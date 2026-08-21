@@ -168,6 +168,54 @@ def _metadata(row: dict[str, Any]) -> dict[str, Any]:
     return parsed
 
 
+def _metadata_has_format_issues(meta: dict[str, Any]) -> bool:
+    """Detect known shape violations without declaring the memory invalid."""
+    if meta.get("_metadata_error"):
+        return True
+    if "type" in meta and not isinstance(meta["type"], str):
+        return True
+    if "importance" in meta:
+        try:
+            float(meta["importance"])
+        except (TypeError, ValueError):
+            return True
+    if "chunked" in meta and not isinstance(meta["chunked"], bool):
+        return True
+    if "participants" in meta and (
+        not isinstance(meta["participants"], list)
+        or any(not isinstance(item, str) for item in meta["participants"])
+    ):
+        return True
+    for field in ("event_time", "time_formed"):
+        if field in meta and meta[field] is not None and _parse_ts(meta[field]) is None:
+            return True
+    for field, allowed in (
+        ("experience_mode", EXPERIENCE_MODES),
+        ("historical_status", HISTORICAL_STATUSES),
+        ("recorded_during", RECORDING_MODES),
+    ):
+        if field in meta and (not isinstance(meta[field], str) or meta[field] not in allowed):
+            return True
+    return False
+
+
+def _metadata_for_mutation(row: dict[str, Any]) -> dict[str, Any]:
+    """Return safe metadata for an explicit retirement/supersession write.
+
+    A malformed metadata field must not block a memory action, but replacing
+    the raw blob without preserving it would destroy information. Keep the
+    original bytes as an opaque field while adding only machine facts the
+    requested mutation is authorized to add.
+    """
+    meta = _metadata(row)
+    if _metadata_has_format_issues(meta):
+        return {
+            "_metadata_error": meta.get("_metadata_error", "metadata fields have unsupported types"),
+            "_raw_metadata_json": row.get("metadata_json"),
+        }
+    return dict(meta)
+
+
 def _linked_chunks(table: Any, meta: dict[str, Any], row_id: str) -> list[dict[str, Any]]:
     """Return optional ordered siblings for one chunk hit.
 
@@ -292,6 +340,12 @@ def _effective_salience(meta: dict) -> float:
 
 def _reinforce(table, row_id: str, meta: dict, now: datetime) -> None:
     """Refresh last-use and boost salience for a genuinely relevant recall."""
+    # A malformed metadata blob is still a memory. Recall must not replace it
+    # with only an error marker just because reinforcement happened to be
+    # eligible for the row. Leave the authored record untouched; later explicit
+    # care can preserve the raw blob while adding machine metadata.
+    if _metadata_has_format_issues(meta):
+        return
     meta = dict(meta)
     meta["salience"] = min(1.0, _effective_salience(meta) + _REINFORCE_SALIENCE_BOOST)
     meta["last_used"] = now.isoformat()
@@ -453,6 +507,22 @@ def _authored_time_dt(meta: dict) -> datetime | None:
     return None
 
 
+def _contact_time_dt(meta: dict) -> datetime | None:
+    """Select the receipt of a contact, not the date of its remembered event.
+
+    ``last_contact_with_companion`` answers when a conversation-bearing memory
+    entered or was formed in the system.  It must not use ``event_time``: a
+    memory created today may describe an event from weeks ago.  New records
+    use ``time_ingested``; legacy records fall back through their receipt-time
+    aliases.  An explicit ``time_formed`` is preferred when present because it
+    is the Qualiant's authored account of when the memory was formed.
+    """
+    formed = _parse_ts(meta.get("time_formed"))
+    if formed is not None:
+        return formed
+    return _ingested_dt(meta)
+
+
 def _provenance_label(meta: dict) -> str | None:
     """Compact provenance label for injected and sampled memory text.
 
@@ -492,6 +562,7 @@ def _last_contact_with(rows: list[dict], participant: str, now: datetime) -> dic
     include `participant`. Used to ground session reasoning in real elapsed
     time since actual contact."""
     latest_dt: datetime | None = None
+    participant_key = participant.casefold()
     for r in rows:
         meta = _metadata(r)
         if _is_historical(meta):
@@ -499,9 +570,9 @@ def _last_contact_with(rows: list[dict], participant: str, now: datetime) -> dic
         participants = meta.get("participants")
         if not isinstance(participants, list):
             continue
-        if participant not in participants:
+        if not any(isinstance(value, str) and value.casefold() == participant_key for value in participants):
             continue
-        dt = _authored_time_dt(meta)
+        dt = _contact_time_dt(meta)
         if dt and (latest_dt is None or dt > latest_dt):
             latest_dt = dt
     if latest_dt is None:
@@ -1815,7 +1886,7 @@ async def memory_amend(
     supersession_reason = reason or "amended by successor record"
     try:
         for old_row in old_rows:
-            retired_meta = dict(_metadata(old_row))
+            retired_meta = _metadata_for_mutation(old_row)
             retired_meta.update({
                 "retired": True,
                 "retired_at": retired_at,
@@ -1869,7 +1940,7 @@ async def memory_retire(
     operation = repository.begin_operation("memory_retire", logical_id)
     try:
         for row in rows:
-            meta = dict(_metadata(row))
+            meta = _metadata_for_mutation(row)
             meta.update({"retired": True, "retired_at": retired_at, "retirement_reason": reason})
             repository.update(
                 table,

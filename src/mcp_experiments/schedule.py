@@ -18,9 +18,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import fcntl
-
 from .config import settings
+from .platform_runtime import exclusive_file_lock
 from .heartbeat import HeartbeatLedger
 from .persistence import durable_append, read_jsonl_lines
 
@@ -211,12 +210,8 @@ class ScheduleStore:
         """Serialize claim decisions across threads and processes."""
         lock_path = self.events_path.with_name(self.events_path.name + ".claim-lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a", encoding="utf-8") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        with exclusive_file_lock(lock_path):
+            yield
 
     def _record_locked(self, event: str, *, operation_id: str | None = None,
                        operation: str | None = None, due_at: str | None = None,
@@ -291,6 +286,10 @@ class ScheduleStore:
             "next_heartbeat_at": None if config.paused else min(tending_at, study_at),
             "next_dreaming_at": None if config.paused else next_dreaming_at(),
             "last_operations": {key: asdict(value) for key, value in last.items()},
+            # Keep dispatch evidence visible without requiring callers to read
+            # the append-only event ledger themselves. This is deliberately
+            # bounded; the ledger remains the complete source of truth.
+            "recent_events": [asdict(event) for event in events[-20:]],
             "coalesced_events": sum(1 for event in events if event.event == "coalesced"),
         }
 

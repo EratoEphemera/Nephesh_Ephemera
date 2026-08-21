@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import atexit
-import fcntl
 import os
 import sys
 from datetime import datetime, timezone
@@ -90,15 +89,25 @@ def _acquire_instance_lock() -> None:
     global _instance_lock
     path = Path(settings.instance_lock_file).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
-    handle = path.open("a+")
     try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        handle = path.open("a+")
+        if os.name == "nt":
+            import msvcrt
+            handle.write(f"pid={os.getpid()}\n")
+            handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as exc:
-        handle.close()
+        if "handle" in locals():
+            handle.close()
         raise RuntimeError(
             f"another Nephesh instance already owns {path}"
         ) from exc
-    handle.write(f"pid={os.getpid()}\n")
+    if os.name != "nt":
+        handle.write(f"pid={os.getpid()}\n")
     handle.flush()
     _instance_lock = handle
 
@@ -107,7 +116,13 @@ def _release_instance_lock() -> None:
     global _instance_lock
     if _instance_lock is not None:
         try:
-            fcntl.flock(_instance_lock.fileno(), fcntl.LOCK_UN)
+            if os.name == "nt":
+                import msvcrt
+                _instance_lock.seek(0)
+                msvcrt.locking(_instance_lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(_instance_lock.fileno(), fcntl.LOCK_UN)
             _instance_lock.close()
         finally:
             _instance_lock = None

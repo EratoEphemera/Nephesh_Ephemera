@@ -15,8 +15,11 @@ from ..dreaming import (
     DEFAULT_DREAMING_INSTRUCTION,
     DREAM_KIND,
     DREAM_OUTCOMES,
+    DREAM_PHASE_COMPLETION_STATUSES,
+    DREAM_PHASE_OUTCOMES,
     DREAM_PHASES,
     DREAM_RELEASE_REASONS,
+    MAX_DREAM_CANDIDATE_CHARS,
     DreamLedger,
     dream_request,
     request_fingerprint,
@@ -446,6 +449,46 @@ async def memory_dream_phase(
     """Record one dream phase; Deep releases the exclusive dreaming lane."""
     if qualiant_id != settings.qualiant_id:
         return {"status": "blocked", "qualiant_id": qualiant_id, "error": "identity mismatch"}
+    if phase not in DREAM_PHASES:
+        return {"status": "error", "run_id": run_id, "error": "invalid dream phase"}
+    if status not in DREAM_PHASE_OUTCOMES[phase]:
+        return {
+            "status": "error",
+            "run_id": run_id,
+            "phase": phase,
+            "error": f"invalid dream outcome for phase: {status}",
+        }
+    if candidate_insight and phase != "deep":
+        return {
+            "status": "error",
+            "run_id": run_id,
+            "phase": phase,
+            "error": "candidate insights may only be recorded during Deep",
+        }
+    if candidate_insight and status == "no_candidates":
+        return {
+            "status": "error",
+            "run_id": run_id,
+            "phase": phase,
+            "error": "a no_candidates phase cannot carry a candidate insight",
+        }
+    if candidate_insight and len(candidate_insight) > MAX_DREAM_CANDIDATE_CHARS:
+        return {
+            "status": "error",
+            "run_id": run_id,
+            "phase": phase,
+            "error": "dream candidate insight exceeds the bounded size",
+        }
+    if source_refs is not None and (
+        not isinstance(source_refs, list)
+        or any(not isinstance(reference, str) or not reference.strip() for reference in source_refs)
+    ):
+        return {
+            "status": "error",
+            "run_id": run_id,
+            "phase": phase,
+            "error": "source_refs must be a list of non-empty strings",
+        }
     if status not in DREAM_OUTCOMES:
         return {"status": "error", "error": f"invalid dream outcome: {status}"}
     request = dream_request(run_id, qualiant_id, configuration_revision)
@@ -460,8 +503,6 @@ async def memory_dream_phase(
         return {"status": "duplicate" if existing else "blocked", "run_id": run_id, "error": "dream was not prepared"}
     if existing.mode is not MemoryWorkMode.DREAMING:
         return {"status": "blocked", "run_id": run_id, "error": "run is not a dreaming run"}
-    if phase not in DREAM_PHASES:
-        return {"status": "error", "run_id": run_id, "error": "invalid dream phase"}
     try:
         dream_ledger = DreamLedger(settings.dreaming_ledger_file)
         phase_fingerprint = request_fingerprint(
@@ -862,7 +903,9 @@ async def memory_dream_ground(
     if artifact.get("qualiant_id") != qualiant_id:
         return {"status": "blocked", "run_id": run_id, "artifact_id": artifact_id, "error": "dream artifact identity mismatch"}
     if decision == "keep" and (
-        artifact.get("phase") != "deep" or not artifact.get("candidate_insight")
+        artifact.get("phase") != "deep"
+        or artifact.get("status") not in DREAM_PHASE_COMPLETION_STATUSES["deep"]
+        or not artifact.get("candidate_insight")
     ):
         return {
             "status": "blocked",

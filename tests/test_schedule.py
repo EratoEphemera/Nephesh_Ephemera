@@ -36,6 +36,7 @@ class ScheduleTests(unittest.TestCase):
         self.assertEqual(status["heartbeat_interval_seconds"], DEFAULT_HEARTBEAT_INTERVAL_SECONDS)
         self.assertEqual(status["study_interval_seconds"], DEFAULT_STUDY_INTERVAL_SECONDS)
         self.assertEqual(status["dreaming_interval_seconds"], DEFAULT_DREAMING_INTERVAL_SECONDS)
+        self.assertLessEqual(len(status["recent_events"]), 20)
         claim = self.store.claim_due(now=datetime(2026, 1, 1, tzinfo=timezone.utc))
         self.assertEqual(claim["status"], "due")
         self.assertEqual(claim["operation"], "tending")

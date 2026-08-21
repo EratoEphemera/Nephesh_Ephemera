@@ -141,6 +141,43 @@ class MemoryChunkingTests(unittest.TestCase):
         self.assertEqual(memory._authored_time_dt(event), memory._display_dt(event))
         self.assertEqual(memory._authored_time_dt(formed), memory._display_dt(formed))
 
+    def test_contact_time_uses_receipt_not_old_event_time(self) -> None:
+        recent_contact = {
+            "participants": ["Gaius"],
+            "event_time": "2026-08-05T03:43:49+00:00",
+            "time_formed": None,
+            "time_ingested": "2026-08-19T07:16:25+00:00",
+        }
+        self.assertEqual(
+            memory._contact_time_dt(recent_contact).isoformat(),
+            "2026-08-19T07:16:25+00:00",
+        )
+
+    def test_contact_time_prefers_explicit_formation_over_receipt(self) -> None:
+        formed = {
+            "time_formed": "2026-08-16T12:00:00+00:00",
+            "time_ingested": "2026-08-17T12:00:00+00:00",
+        }
+        self.assertEqual(
+            memory._contact_time_dt(formed).isoformat(),
+            "2026-08-16T12:00:00+00:00",
+        )
+
+    def test_contact_participant_matching_is_case_insensitive(self) -> None:
+        rows = [{
+            "id": "recent",
+            "text": "recent conversation",
+            "metadata_json": json.dumps({
+                "participants": ["Gaius"],
+                "time_ingested": "2026-08-20T14:00:00+00:00",
+            }),
+        }]
+        result = memory._last_contact_with(
+            rows, "gaius", memory._parse_ts("2026-08-20T15:00:00+00:00")
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result["timestamp"], "2026-08-20T14:00:00+00:00")
+
     def test_amendment_preserves_time_and_provenance_on_every_chunk(self) -> None:
         async def run() -> tuple[dict, list[dict]]:
             store = FakeMemoryStore()
@@ -187,17 +224,27 @@ class MemoryChunkingTests(unittest.TestCase):
                 # An unversioned row remains a valid historical format; the
                 # reader must not invent a schema generation for it.
                 self.assertNotIn("memory_schema_version", json.loads(store.rows_by_table["memories"][0]["metadata_json"]))
+                raw_before_recall = store.rows_by_table["memories"][0]["metadata_json"]
                 recall = await memory.memory_recall("readable", n_results=1, include_retired=True)
+                self.assertEqual(store.rows_by_table["memories"][0]["metadata_json"], raw_before_recall)
                 context = await memory.memory_context(limit=1, include_retired=True)
                 sample = await memory.memory_sample(n=1, include_retired=True)
                 amend = await memory.memory_amend("bad", text="corrected")
-                return recall, context, sample, amend
+                amended_metadata = json.loads(store.rows_by_table["memories"][0]["metadata_json"])
+                retired = await memory.memory_retire("bad", "preserve malformed record")
+                return recall, context, sample, amend, retired, amended_metadata, store.rows_by_table["memories"]
 
-        recall, context, sample, amend = asyncio.run(run())
+        recall, context, sample, amend, retired, amended_metadata, rows = asyncio.run(run())
         self.assertEqual(recall["results_count"], 1)
         self.assertIn("corrupt but readable", context["context"])
         self.assertEqual(sample["sampled"], 1)
         self.assertEqual(amend["status"], "amended")
+        self.assertEqual(retired["status"], "retired")
+        self.assertEqual(amended_metadata["_raw_metadata_json"], json.dumps({
+            "type": ["technical"], "importance": {"bad": True},
+            "chunked": True, "chunk_index": {"bad": True},
+            "participants": {"not": "a list"}, "event_time": ["bad"],
+        }))
     def test_chunker_preserves_order_and_overlap(self) -> None:
         text = "".join(f"word{i} " for i in range(700))
         chunks = memory._chunk_memory_text(text)

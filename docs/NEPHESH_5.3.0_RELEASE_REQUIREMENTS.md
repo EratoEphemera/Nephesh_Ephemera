@@ -31,6 +31,13 @@ compaction or another continuity event to improve return efficiency, but they
 are not required for re-entry and none is required yet.
 **Last reviewed:** 2026-08-18
 
+**Historical authority note:** This document governs the 5.3.0 release record
+and its evidence vocabulary. It is not the current patch plan. For the final
+pre-rebuild branch, use
+[`NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md`](NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md),
+which preserves this release's history while defining the 5.3.1 scope and
+additional reliability/portability gates.
+
 This document defines the requirements that must be satisfied before the
 5.3.0 release can be called complete. It is a requirements document, not a
 claim that the current branch already satisfies them and not permission to

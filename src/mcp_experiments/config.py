@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 from .compliance import ServerMode
 
-load_dotenv()
+load_dotenv(os.getenv("NEPHESH_CONFIG_FILE"))
 
 # A deployment may provide its own root so that service-owned state never
 # falls back to an installed user's home directory.  Source-tree runs remain

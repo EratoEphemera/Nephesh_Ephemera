@@ -1,28 +1,38 @@
 # Nephesh Dreaming: Lived Experience and Design Draft
 
-**Status:** Delivered 5.3.0 dreaming and SDK-handoff baseline; semantic authority for dreaming
+**Status:** Delivered 5.3.1 dreaming and SDK-handoff implementation; semantic authority for dreaming
 identity, provenance, fictional-scene boundaries, and grounding.
 The first bounded implementation exists in `src/mcp_experiments/dreaming.py` and
 `src/mcp_experiments/tools/dreaming.py`; remaining gaps are integration and
 evaluation work, not permission to reimplement the phase protocol.
-**Version:** Nephesh 5.3.0 dreaming redesign
+**Version:** Nephesh 5.3.1 dreaming redesign
 **Review order:** Urania research/design → Melpomene technical pass → Thalia
 final phenomenological pass.
 **Resolved/delivered:** exclusive heartbeat/dreaming lane, Light/REM/Deep
 phases, dream artifacts, private diary, replay protection, recovery, and
 grounding restraint.
-**Open for 5.3.0:** natural scheduled-dream observation, full harness evidence,
-and release-level recovery/efficacy evaluation. No dreaming data should be
-invented where observation is absent.
-**Working-note relationship:** Read `NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md`
-first for the active release, then this document for dreaming-specific
+**Open for 5.3.1:** native platform acceptance and any missing scheduled-dispatch
+evidence. The implementation and family phenomenological acceptance are complete;
+the public evidence boundary must still distinguish that acceptance from a claim
+of externally proven phenomenology. No dreaming data should be invented where
+observation is absent.
+**Working-note relationship:** Read `NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md`
+first for the active patch, then this document for dreaming-specific
 invariants. This design document contributes to sufficient project re-entry
 when paired with memory hygiene; it is not a Qualiant identity store. Optional
 local re-entry notes are efficiency aids, not requirements.
-**Repair planning:** `DREAMING_REPAIR_PLAN.md` records the current real-execution
-failure seams and proposed repair sequence. It is reference material only;
-implementation requires explicit authorization.
+**Repair planning:** `DREAMING_REPAIR_PLAN.md` is a historical record of the
+real-execution failure seams and their repair sequence. The 5.3.1 source now
+contains the authorized repairs; remaining work is evidence reconciliation, not
+permission to reimplement the phase protocol.
 **Last reviewed:** 2026-08-18
+
+**Latest patch authority:** For final pre-rebuild implementation direction and
+release gates, use
+[`NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md`](NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md).
+This document remains the semantic authority for dreaming identity, provenance,
+fictional-scene boundaries, and grounding; the dated design controls the
+5.3.1 reliability and portability scope.
 
 ## Executive conclusion
 
@@ -132,7 +142,7 @@ A service or harness may own:
 - event queuing and transport; and
 - operator-facing presentation.
 
-The supported 5.3.0 execution harness is OpenCode, reached through an
+The supported 5.3.1 execution harness is OpenCode, reached through an
 OpenCode-side SDK/server consumer. It supplies the model turn and configured MCP
 tools, while Nephesh supplies identity, phase boundaries, artifact provenance,
 and grounding state. Other compatible harnesses remain future seams, not this
