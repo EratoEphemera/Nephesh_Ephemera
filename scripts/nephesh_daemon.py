@@ -285,7 +285,7 @@ class HarnessRunner:
             "duration_seconds": settings.dreaming_session_seconds,
             "handoff": "Continue through memory_dream_recall and the dream phase/release tools; Nephesh does not spawn the model session.",
         }
-        command = shlex.split(settings.dreaming_consumer_command)
+        command = shlex.split(settings.dreaming_consumer_command, posix=os.name != "nt")
         if not command:
             return await self._failed_result(claim, "dream SDK consumer command is empty")
         try:
@@ -398,7 +398,10 @@ async def run_daemon(args: argparse.Namespace) -> None:
         try:
             loop.add_signal_handler(getattr(signal, name), stop.set)
         except (NotImplementedError, RuntimeError):
-            pass
+            if os.name == "nt":
+                sig = getattr(signal, name, None)
+                if sig is not None:
+                    signal.signal(sig, lambda *_: loop.call_soon_threadsafe(stop.set))
     lock_path = Path(settings.daemon_lock_file)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     from mcp_experiments.platform_runtime import exclusive_file_lock

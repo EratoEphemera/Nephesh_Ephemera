@@ -12,14 +12,6 @@ class ErrorResult(TypedDict, total=False):
     details: dict[str, object] | None
 
 
-class HealthResult(TypedDict):
-    status: Literal["ok", "degraded", "unavailable", "failed"]
-    mode: str
-    tls: bool
-    tools_available: list[str]
-    floor: TruthfulFloor
-
-
 class FloorCheck(TypedDict, total=False):
     status: Literal["value", "unavailable", "unset", "failed", "uncertain"]
     value: object
@@ -30,6 +22,14 @@ class FloorCheck(TypedDict, total=False):
 class TruthfulFloor(TypedDict):
     version: str
     checks: dict[str, FloorCheck]
+
+
+class HealthResult(TypedDict):
+    status: Literal["ok", "degraded", "unavailable", "failed"]
+    mode: str
+    tls: bool
+    tools_available: list[str]
+    floor: TruthfulFloor
 
 
 class SystemTimeResult(TypedDict):

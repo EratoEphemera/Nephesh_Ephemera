@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
@@ -186,7 +186,7 @@ class DreamingToolTests(unittest.TestCase):
                 self.assertEqual(queued["status"], "queued")
                 self.assertNotIn("handoff", queued)
                 self.assertEqual(dream_context.await_count, 0)
-                records = [json.loads(line) for line in (root / "dreams.jsonl").read_text().splitlines()]
+                records = [json.loads(line) for line in (root / "dreams.jsonl").read_text(encoding="utf-8").splitlines()]
                 self.assertEqual(records[0]["status"], "queued")
                 self.assertEqual(records[0]["request"]["seed"], "queued")
 

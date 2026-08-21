@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import unittest
 import json
@@ -129,7 +129,7 @@ class PersistenceRepositoryTests(unittest.TestCase):
                 OperationState.UNCERTAIN,
                 reason="successor stored but original update failed",
             )
-            rows = [json.loads(line) for line in ledger.path.read_text().splitlines()]
+            rows = [json.loads(line) for line in ledger.path.read_text(encoding="utf-8").splitlines()]
             self.assertEqual([row["state"] for row in rows], ["prepared", "uncertain"])
             self.assertEqual(rows[-1]["operation_id"], record.operation_id)
             self.assertEqual(rows[-1]["details"]["successor_id"], "memory-2")

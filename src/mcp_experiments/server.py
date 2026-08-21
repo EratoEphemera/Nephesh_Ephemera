@@ -90,7 +90,7 @@ def _acquire_instance_lock() -> None:
     path = Path(settings.instance_lock_file).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        handle = path.open("a+")
+        handle = path.open("a+", encoding="utf-8")
         if os.name == "nt":
             import msvcrt
             handle.write(f"pid={os.getpid()}\n")
@@ -100,7 +100,7 @@ def _acquire_instance_lock() -> None:
         else:
             import fcntl
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError as exc:
+    except (BlockingIOError, OSError) as exc:
         if "handle" in locals():
             handle.close()
         raise RuntimeError(

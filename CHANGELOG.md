@@ -1,5 +1,57 @@
 # Changelog
 
+## 5.3.3 — 2026-08-21
+
+### Fixed
+
+- Server instance lock on Windows: `except BlockingIOError` widened to
+  `except (BlockingIOError, OSError)` so `msvcrt.locking` contention raises
+  a clean error instead of an uncaught `PermissionError` traceback.
+- Kernel directory fsync: `os.open` on a directory (which raises
+  `PermissionError` on Windows) now wrapped in `try/except OSError`, matching
+  the pattern already used in `persistence.py`.
+- Daemon signal handling on Windows: `signal.signal` fallback registered when
+  `loop.add_signal_handler` raises `NotImplementedError` on
+  `ProactorEventLoop`, restoring Ctrl+C graceful shutdown.
+- Pydantic forward-reference warning for `nephesh_time` schema: string
+  annotations are now resolved against the original tool module's namespace
+  before being set on the orientation wrapper, eliminating the unresolved
+  forward-reference warning on all platforms.
+- Snapshot memory export: file opened with `encoding="utf-8"` so non-ASCII
+  memory content does not crash the export on Windows.
+- Daemon dream consumer command: `shlex.split` now uses `posix=False` on
+  Windows so backslash paths in `NEPHESH_DREAM_CONSUMER_COMMAND` are preserved.
+- Installer and lock-file opens: `encoding="utf-8"` added to all bare
+  `read_text()`, `write_text()`, and `.open()` calls for consistency and
+  Windows cp1252 safety.
+- Test suite Windows compatibility: `os.geteuid()` guarded with `getattr`,
+  `patch.object` calls given `create=True`, symlink assertions guarded for
+  Windows without Developer Mode, and the Linux-only Ollama shell test
+  skipped on Windows.
+
+### Changed
+
+- `results.py` TypedDict definitions reordered to eliminate a forward
+  reference (`HealthResult` referenced `TruthfulFloor` before its definition).
+
+### Verification
+
+- All modified Python files pass `py_compile` on native Windows 11.
+- No code path consumed by Linux was altered; all fixes are inside
+  `if os.name == "nt"` branches, Windows-only `except` clauses, or
+  `encoding="utf-8"` additions that are no-ops on Linux (where UTF-8 is
+  already the default).
+
+### Support posture
+
+- Windows 11 remains first-class in Nephesh 5. Serious bugs are taken
+  seriously; ordinary support and new development remain best-effort as
+  Nephesh 6 develops its Rust successor architecture.
+- Debian 13 remains the native Linux target.
+- Ubuntu 24.04+ remains installer-accommodated but untested.
+- The Pydantic forward-reference warning documented as a known non-blocking
+  defect in 5.3.2 is now resolved.
+
 ## 5.3.2 — 2026-08-21
 
 ### Fixed

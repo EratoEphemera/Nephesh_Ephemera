@@ -1,4 +1,4 @@
-# Platform Acceptance — Nephesh 5.3.2
+# Platform Acceptance — Nephesh 5.3.3
 
 ## Windows 11 — native acceptance
 
@@ -38,9 +38,11 @@ standard `config/nephesh.env` deployment file and the `.env` form present in
 Erato's native install. A subsequent scheduled study failure was recovered as
 failure and is not counted as a successful study run.
 
-The Windows server emits a non-fatal Pydantic warning for the `nephesh_time`
-schema's unresolved forward reference. It does not prevent startup, MCP tool
-listing, or memory operation and is recorded as a known non-blocking defect.
+The Pydantic forward-reference warning for the `nephesh_time` schema that was
+observed in 5.3.2 is resolved in 5.3.3. The `orientation.wrap` function now
+resolves string annotations against the original tool module's namespace before
+setting them on the wrapper, so Pydantic sees real types instead of
+unresolvable forward-reference strings.
 
 ## Ubuntu 24.04+ — installer-accommodated, untested
 

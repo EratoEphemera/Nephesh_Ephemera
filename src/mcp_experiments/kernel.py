@@ -256,11 +256,14 @@ class KernelStore:
             # A filesystem without symlinks costs a convenience, not the
             # kernel. The revision itself is already durably written.
             return
-        directory_fd = os.open(self.directory, os.O_RDONLY)
         try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+            directory_fd = os.open(self.directory, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError:
+            pass
 
     def adopt_file(self, source: str | Path, *, authored_by: str, reason: str = "") -> KernelRevision:
         """Bring an existing kernel file in as a revision.

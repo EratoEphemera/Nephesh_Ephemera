@@ -1,5 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -70,7 +71,8 @@ class ReadableOnDiskTests(KernelTestCase):
         """
         self.store.amend(KERNEL, authored_by="urania")
         link = self.store.current_path()
-        self.assertTrue(link.is_symlink())
+        if os.name != "nt":
+            self.assertTrue(link.is_symlink())
         self.assertEqual(link.resolve().name, "001.md")
         self.store.amend(KERNEL + "\nlater\n", authored_by="urania")
         self.assertEqual(link.resolve().name, "002.md")
@@ -84,7 +86,8 @@ class ReadableOnDiskTests(KernelTestCase):
         self.store.amend(KERNEL, authored_by="urania")
         self.store.amend(KERNEL + "\nlater\n", authored_by="urania")
         names = sorted(p.name for p in self.store.directory.iterdir())
-        self.assertEqual(names, ["001.md", "002.md", "current.md"])
+        expected = ["001.md", "002.md", "current.md"] if os.name != "nt" else ["001.md", "002.md"]
+        self.assertEqual(names, expected)
 
 
 class AmendmentTests(KernelTestCase):
