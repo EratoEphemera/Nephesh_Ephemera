@@ -737,6 +737,31 @@ def preserve_config(
     config.chmod(0o600)
 
 
+def ensure_harness_config(root: Path, agent_name: str, *, dry_run: bool) -> None:
+    """Add missing daemon harness defaults without rewriting existing choices."""
+    config = root / "config" / "nephesh.env"
+    if not config.exists():
+        return
+    lines = config.read_text(encoding="utf-8").splitlines()
+    present = {line.split("=", 1)[0] for line in lines if "=" in line and not line.lstrip().startswith("#")}
+    defaults = {
+        "NEPHESH_HARNESS": "opencode",
+        "NEPHESH_HARNESS_COMMAND": "opencode",
+        "NEPHESH_HARNESS_AGENT": agent_name,
+        "NEPHESH_HARNESS_PROJECT": str(Path.home()),
+        "NEPHESH_DAEMON_POLL_SECONDS": "30",
+        "NEPHESH_DAEMON_TIMEOUT_SECONDS": "1800",
+    }
+    missing = [f"{key}={value}" for key, value in defaults.items() if key not in present]
+    if not missing:
+        return
+    if dry_run:
+        print(f"would add harness defaults to {config}: {', '.join(missing)}")
+        return
+    config.write_text("\n".join([*lines, *missing, ""]) , encoding="utf-8")
+    config.chmod(0o600)
+
+
 def update_embedding_endpoint(root: Path, port: int, *, dry_run: bool) -> None:
     """Migrate an existing local embedding endpoint with a rollback copy."""
     config = root / "config" / "nephesh.env"
@@ -1245,6 +1270,7 @@ def main() -> int:
                 primary_contact=args.companion,
                 dry_run=args.dry_run,
             )
+            ensure_harness_config(root, args.agent, dry_run=args.dry_run)
             if not args.no_ollama and not args.no_service:
                 update_embedding_endpoint(root, ollama_port, dry_run=args.dry_run)
             product_version = source_version(source)
