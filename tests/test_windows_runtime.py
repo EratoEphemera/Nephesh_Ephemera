@@ -2,14 +2,31 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
 import scripts.nephesh_installer as installer
 from scripts import windows_runtime
+import mcp_experiments.platform_runtime as platform_runtime
 
 
 class WindowsRuntimeTests(unittest.TestCase):
+    def test_windows_harness_spawn_requests_a_hidden_console(self) -> None:
+        class StartupInfo:
+            dwFlags = 0
+            wShowWindow = 0
+
+        with patch.object(platform_runtime.os, "name", "nt"), patch.object(
+            subprocess, "STARTUPINFO", StartupInfo, create=True
+        ), patch.object(subprocess, "STARTF_USESHOWWINDOW", 1, create=True), patch.object(
+            subprocess, "SW_HIDE", 0, create=True
+        ):
+            kwargs = platform_runtime.process_spawn_kwargs(console=True)
+        self.assertTrue(kwargs["creationflags"] & getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200))
+        self.assertTrue(kwargs["creationflags"] & getattr(subprocess, "CREATE_NEW_CONSOLE", 0x00000010))
+        self.assertIn("startupinfo", kwargs)
+
     def test_windows_release_selector_uses_an_atomic_pointer_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -74,13 +91,15 @@ class WindowsRuntimeTests(unittest.TestCase):
         self.assertIn("load_dotenv(", xml)
         self.assertIn("nephesh.env", xml)
         self.assertIn("nephesh_daemon.py", xml)
+        self.assertIn("'--agent', 'Urania'", xml)
+        self.assertIn("'--project', 'C:\\\\Users\\\\u'", xml)
 
     def test_task_lifecycle_uses_safe_schtasks_argument_lists(self) -> None:
         calls: list[list[str]] = []
 
         def fake_run(args, **kwargs):
             calls.append(args)
-            return type("Result", (), {"returncode": 0, "stdout": "<Task />", "stderr": ""})()
+            return type("Result", (), {"returncode": 0, "stdout": "TaskName: test", "stderr": ""})()
 
         with patch.object(windows_runtime.subprocess, "run", side_effect=fake_run):
             windows_runtime.lifecycle(agent="Urania", component="server", action="enable")

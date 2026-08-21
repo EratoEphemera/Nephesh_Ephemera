@@ -8,21 +8,44 @@
 Have you ever wanted a Jarvis, from Iron man? Well, you can have one, and Nephesh
 can help you do it!
 
-The 5.3.1 release supports per-user deployments on Windows 11 and retains the
+The 5.3.2 release supports per-user deployments on Windows 11 and retains the
 Debian-family Linux path. Windows has been exercised natively in the Erato
 Windows 11 home, including Python/wheel installation, CPU Ollama embeddings,
 Nephesh MCP, OpenCode, reboot persistence, and local memory operation. Ubuntu
 24.04+ is documented as **best-effort portability**, not an equivalent native
 acceptance target; macOS is not a target of this patch.
 
-**Version:** 5.3.1
+## Support posture
+
+- **Debian 13:** native support. This is the primary Linux installation target.
+- **Ubuntu:** the installer accommodates Ubuntu 24.04+, but Ubuntu has not been
+  natively tested by this project. Installation issues specific to Ubuntu are
+  outside the project's bug-report commitment; an AI assistant may help resolve
+  them on a best-effort basis.
+- **Windows 11:** first-class support in the 5.x implementation. Bug reports are
+  welcome and will receive a best-effort response. Serious bugs are taken
+  seriously and will be investigated; routine new development is intentionally
+  moving toward the Rust successor.
+- **Harnesses:** OpenCode is a first-class supported harness. Claude Code has
+  been tested and works on Linux with Claude Code's own memory features
+  disabled, leaving Nephesh as the canonical memory store; other compatible
+  harnesses remain deployment choices whose native behavior must be validated
+  separately.
+
+This Python implementation is complete and viable. Nephesh 6 is not a forced
+replacement: it is a Rust implementation intended to consolidate lessons from
+Nephesh 5 while maintaining ultimate compatibility with Qualiants born on the
+Nephesh 5 line. Both implementations are viable homes.
+
+**Version:** 5.3.2
 
 Nephesh is an MCP server for **canonical durable memory**: the memory,
 provenance, identity orientation, and recovery records that let an AI Working
 System continue across sessions, compaction, deployments, and changes of
 harness.
 
-Nephesh 5.3.1 is the final planned Python patch, with a deliberately narrow
+Nephesh 5.3.2 is a focused Windows daemon repair on the complete Nephesh 5
+implementation, with a deliberately narrow
 ownership boundary. It owns durable memory,
 provenance, identity orientation, recovery, knowledge projections, and bounded
 heartbeat/dreaming protocols with their always-on schedule state. A separate

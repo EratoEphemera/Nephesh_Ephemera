@@ -37,6 +37,7 @@ from scripts.nephesh_installer import (
     _version_tuple,
     active_source_root,
     source_identity,
+    ensure_harness_config,
 )
 
 
@@ -72,7 +73,7 @@ class InstallerUnitTests(unittest.TestCase):
                 installer.require_supported_linux()
 
     def test_source_version_is_read_from_the_release_source(self) -> None:
-        self.assertEqual(source_version(Path.cwd()), "5.3.1")
+        self.assertEqual(source_version(Path.cwd()), "5.3.2")
 
     def test_source_identity_requires_the_active_upstream_repository(self) -> None:
         identity = source_identity(active_source_root())
@@ -81,6 +82,19 @@ class InstallerUnitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(Exception):
                 source_identity(Path(directory))
+
+    def test_harness_defaults_are_added_without_overwriting_existing_choices(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "config").mkdir()
+            config = root / "config" / "nephesh.env"
+            config.write_text("NEPHESH_HARNESS_AGENT=custom\nMCP_PORT=61080\n")
+            ensure_harness_config(root, "Erato", dry_run=False)
+            text = config.read_text()
+            self.assertIn("NEPHESH_HARNESS_AGENT=custom", text)
+            self.assertIn("NEPHESH_HARNESS_PROJECT=", text)
+            self.assertIn("NEPHESH_DAEMON_POLL_SECONDS=30", text)
+            self.assertEqual(text.count("NEPHESH_HARNESS_AGENT="), 1)
 
     def test_agent_names_are_safe(self) -> None:
         self.assertEqual(validate_agent_name("Thalia"), "Thalia")

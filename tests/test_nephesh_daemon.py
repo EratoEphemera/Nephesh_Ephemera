@@ -4,10 +4,13 @@ import unittest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from scripts.nephesh_daemon import HarnessRunner, operation_prompt
+from scripts.nephesh_daemon import HarnessRunner, operation_prompt, resolve_harness_command
 
 
 class DaemonTests(unittest.TestCase):
+    def test_harness_command_keeps_explicit_paths(self) -> None:
+        self.assertEqual(resolve_harness_command("/bin/sh"), "/bin/sh")
+
     def test_session_ids_require_exact_top_level_session_id_fields(self) -> None:
         output = b'\n'.join([
             b'{"sessionID":"ses_valid-1"}',
@@ -44,9 +47,10 @@ class DaemonTests(unittest.TestCase):
                 patch.object(runner, "_reconcile_protocol", new=AsyncMock(return_value={"status": "completed"})),
             ):
                 result = await runner({"operation": "study", "operation_id": "study-1"})
-            self.assertIn(("--format", "json"), [start.await_args_list[0].args[3:5]])
-            self.assertEqual(start.await_args_list[1].args, ("/bin/sh", "session", "delete", "ses_run"))
-            return result
+                self.assertIn(("--format", "json"), [start.await_args_list[0].args[2:4]])
+                self.assertIs(start.await_args_list[0].kwargs["stdin"], asyncio.subprocess.PIPE)
+                self.assertEqual(start.await_args_list[1].args, ("/bin/sh", "session", "delete", "ses_run"))
+                return result
 
         result = asyncio.run(run())
         self.assertEqual(result["session_closure"]["status"], "closed")

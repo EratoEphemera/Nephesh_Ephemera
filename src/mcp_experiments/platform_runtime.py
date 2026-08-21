@@ -46,10 +46,27 @@ def exclusive_file_lock(path: str | Path) -> Iterator[object]:
         handle.close()
 
 
-def process_spawn_kwargs() -> dict[str, int | bool]:
-    """Return process-group/tree setup supported by the current OS."""
+def process_spawn_kwargs(*, console: bool = False) -> dict[str, object]:
+    """Return process setup supported by the current OS.
+
+    OpenCode's Windows CLI opens ``CONIN$`` even for non-interactive ``run``
+    calls. A daemon child therefore needs a hidden console allocation rather
+    than a pipe-only process.
+    """
     if os.name == "nt":
-        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)}
+        flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        startupinfo = None
+        if console:
+            flags |= getattr(subprocess, "CREATE_NEW_CONSOLE", 0x00000010)
+            startupinfo_type = getattr(subprocess, "STARTUPINFO", None)
+            if startupinfo_type is not None:
+                startupinfo = startupinfo_type()
+                startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
+                startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+        result: dict[str, object] = {"creationflags": flags}
+        if startupinfo is not None:
+            result["startupinfo"] = startupinfo
+        return result
     return {"start_new_session": True}
 
 

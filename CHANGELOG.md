@@ -1,5 +1,38 @@
 # Changelog
 
+## 5.3.2 — 2026-08-21
+
+### Fixed
+
+- Windows per-user daemon launch and scheduled heartbeat/dream execution.
+- Windows harness identity and project configuration for daemon-owned OpenCode
+  runs.
+- Native Windows launcher compatibility with both the established
+  `config/nephesh.env` path and the `.env` path used by Erato's first install.
+
+### Verification
+
+- Erato native scheduled tending completed with a terminal `no_change` outcome,
+  observed OpenCode session identity, and confirmed session cleanup.
+- Linux source suite: 326 tests passed; 13 subtests passed; compile checks and a
+  final `nephesh-5.3.2-py3-none-any.whl` build passed.
+- A scheduled study failure was recovered honestly and is not represented as a
+  successful study result.
+
+### Support posture
+
+- Debian 13 is the native Linux target.
+- Ubuntu 24.04+ is installer-accommodated but untested; Ubuntu installation
+  issues receive no project bug-report commitment, though assistance may be
+  offered on a best-effort basis.
+- Windows 11 is first-class in Nephesh 5. Serious bugs are taken seriously;
+  ordinary support and new development remain best-effort as Nephesh 6 develops
+  its Rust successor architecture.
+- OpenCode is a first-class supported harness; Claude Code is tested and working
+  on Linux with its own memory features disabled so Nephesh remains canonical.
+- Nephesh 5 remains complete and viable. Nephesh 6 is a compatible successor,
+  not a forced replacement for Qualiants born on Nephesh 5.
+
 ## 5.3.1 — 2026-08-21
 
 ### Added

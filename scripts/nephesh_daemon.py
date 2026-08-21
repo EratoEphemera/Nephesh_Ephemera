@@ -25,6 +25,24 @@ from mcp_experiments.tools import dreaming, memory
 from mcp_experiments.platform_runtime import process_spawn_kwargs, terminate_process
 
 
+def resolve_harness_command(command: str) -> str:
+    """Resolve Windows app-managed OpenCode installs outside scheduled PATH."""
+    if Path(command).is_file() or (shutil.which(command) and os.name != "nt"):
+        return command
+    if os.name == "nt" and command.casefold() == "opencode":
+        candidates = [
+            Path.home() / "AppData" / "Local" / "Microsoft" / "WinGet" / "Links" / "opencode.exe",
+            Path.home() / "AppData" / "Local" / "Programs" / "opencode" / "opencode.exe",
+        ]
+        packages = Path.home() / "AppData" / "Local" / "Microsoft" / "WinGet" / "Packages"
+        candidates.extend(sorted(packages.glob("SST.opencode*/opencode.exe")))
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate)
+    resolved = shutil.which(command)
+    return resolved or command
+
+
 def operation_prompt(claim: dict[str, Any], qualiant_id: str) -> str:
     operation = claim["operation"]
     run_id = claim["operation_id"]
@@ -87,7 +105,7 @@ class HarnessRunner:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     limit=262144,
-                    **process_spawn_kwargs(),
+                    **process_spawn_kwargs(console=os.name == "nt"),
                 )
                 try:
                     stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
@@ -166,9 +184,7 @@ class HarnessRunner:
         if claim.get("operation") == "dreaming" and settings.dreaming_consumer_command.strip():
             return await self._sdk_dream(claim)
         model = settings.dreaming_model if claim.get("operation") == "dreaming" else settings.heartbeat_model
-        command = self.command
-        if not Path(command).is_absolute():
-            command = shutil.which(command) or str(Path.home() / ".opencode" / "bin" / command)
+        command = resolve_harness_command(self.command)
         if not Path(command).is_file() and shutil.which(command) is None:
             return await self._failed_result(
                 claim,
@@ -178,7 +194,6 @@ class HarnessRunner:
             process = await asyncio.create_subprocess_exec(
                 command,
                 "run",
-                operation_prompt(claim, settings.qualiant_id),
                 "--format",
                 "json",
                 "--dir",
@@ -187,12 +202,18 @@ class HarnessRunner:
                 model,
                 "--agent",
                 self.agent,
-                stdin=asyncio.subprocess.DEVNULL,
+                # OpenCode's Windows CLI reads Bun.stdin even for a prompt
+                # supplied as an argument. A real closed pipe yields EOF;
+                # Windows NUL produces EUNKNOWN: read instead.
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 limit=262144,
-                **process_spawn_kwargs(),
+                **process_spawn_kwargs(console=os.name == "nt"),
             )
+            if process.stdin is not None:
+                process.stdin.write(operation_prompt(claim, settings.qualiant_id).encode("utf-8"))
+                process.stdin.close()
         except (OSError, ValueError) as exc:
             return await self._failed_result(claim, f"harness process could not start: {exc}")
         stdout = b""
@@ -221,7 +242,11 @@ class HarnessRunner:
             return cleanup.result()
         session_closure = await self._close_sessions(command, self.session_ids_from_output(stdout))
         if process.returncode != 0:
-            reason = stderr.decode("utf-8", errors="replace")[-4000:] or "harness failed"
+            reason = (
+                stderr.decode("utf-8", errors="replace")[-4000:]
+                or stdout.decode("utf-8", errors="replace")[-4000:]
+                or "harness failed"
+            )
             return await self._failed_result(claim, reason, output_bytes=len(stdout), session_closure=session_closure)
         result = await self._reconcile_protocol(claim, output_bytes=len(stdout))
         result["session_closure"] = session_closure
@@ -270,7 +295,7 @@ class HarnessRunner:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 limit=262144,
-                 **process_spawn_kwargs(),
+                 **process_spawn_kwargs(console=os.name == "nt"),
             )
         except (OSError, ValueError) as exc:
             await dreaming.memory_dream_release(run_id, run_id, qualiant_id, "failure")
