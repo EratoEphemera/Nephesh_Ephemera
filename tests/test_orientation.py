@@ -127,5 +127,69 @@ class NonInterferenceTests(OrientationTestCase):
         self.assertGreaterEqual(len(get_registered_names()), 25)
 
 
+class AnnotationResolutionTests(OrientationTestCase):
+    """Regression: the orientation wrapper must resolve string annotations
+    (from ``from __future__ import annotations``) against the original
+    tool module's namespace, not the wrapper's own namespace.
+
+    Before the fix, ``nephesh_time`` returned ``SystemTimeResult`` as an
+    unresolvable forward-reference string because the double-wrapping chain
+    changed ``__globals__`` to point at modules that never imported
+    ``SystemTimeResult``. Pydantic/FastMCP emitted a non-fatal warning.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.store.amend(KERNEL, authored_by="installer")
+
+    def test_resolve_annotations_returns_real_types_not_strings(self) -> None:
+        from mcp_experiments.results import SystemTimeResult
+        from mcp_experiments.tools.info import nephesh_time
+
+        resolved = orientation._resolve_annotations(nephesh_time)
+        self.assertIsInstance(resolved, dict)
+        self.assertIn("return", resolved)
+        return_annotation = resolved["return"]
+        # The resolved annotation must be the actual type, not a string.
+        self.assertIsNotInstance(return_annotation, str)
+        self.assertIs(return_annotation, SystemTimeResult)
+
+    def test_wrapped_nephesh_time_has_resolved_return_annotation(self) -> None:
+        from mcp_experiments.results import SystemTimeResult
+        from mcp_experiments.tools.info import nephesh_time
+
+        wrapped = orientation.wrap(nephesh_time)
+        annotations = getattr(wrapped, "__annotations__", {})
+        self.assertIn("return", annotations)
+        return_annotation = annotations["return"]
+        self.assertIsNotInstance(return_annotation, str)
+        self.assertIs(return_annotation, SystemTimeResult)
+
+    def test_resolve_annotations_returns_empty_for_no_annotations(self) -> None:
+        def bare_tool() -> dict:
+            return {}
+
+        resolved = orientation._resolve_annotations(bare_tool)
+        # A tool with annotations (the return hint) should still resolve.
+        self.assertIn("return", resolved)
+
+    def test_resolve_annotations_fallback_emits_warning_on_failure(self) -> None:
+        import warnings
+
+        def tool_with_bad_module() -> dict:
+            return {}
+
+        # Point __module__ to a non-existent module to force ImportError.
+        tool_with_bad_module.__module__ = "nonexistent.module.path"
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                resolved = orientation._resolve_annotations(tool_with_bad_module)
+            self.assertEqual(resolved, {})
+            self.assertTrue(any("Could not resolve" in str(w.message) for w in caught))
+        finally:
+            tool_with_bad_module.__module__ = __name__
+
+
 if __name__ == "__main__":
     unittest.main()

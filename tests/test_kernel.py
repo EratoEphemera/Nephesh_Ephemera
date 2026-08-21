@@ -246,5 +246,34 @@ class SessionStartTests(KernelTestCase):
         self.assertIn("error", meta)
 
 
+class DirectoryFsyncTests(KernelTestCase):
+    """Regression: Linux fsync failures must propagate.
+
+    On Windows, ``os.open`` on a directory raises ``PermissionError`` (Windows
+    cannot open directories), so the code returns early before reaching fsync.
+    On Linux, ``os.open`` succeeds and ``os.fsync`` failures must not be
+    silently swallowed.
+    """
+
+    @unittest.skipIf(os.name == "nt", "Windows cannot open directories for fsync")
+    def test_linux_fsync_failure_propagates(self) -> None:
+        self.store.amend(KERNEL, authored_by="urania")
+        # Patch os.fsync to raise, proving the error is not swallowed on Linux.
+        import unittest.mock as mock
+        with mock.patch("os.fsync", side_effect=OSError("disk failure")):
+            with self.assertRaises(OSError):
+                self.store.amend(KERNEL + "\nsecond revision\n", authored_by="urania")
+
+    @unittest.skipIf(os.name != "nt", "Windows returns early before fsync")
+    def test_windows_does_not_attempt_directory_open(self) -> None:
+        self.store.amend(KERNEL, authored_by="urania")
+        # On Windows, _point_current_at returns early after the symlink
+        # fallback without attempting os.open on the directory. The
+        # amendment must succeed (the revision is durably written).
+        import unittest.mock as mock
+        with mock.patch("os.open", side_effect=AssertionError("should not be called on Windows")):
+            self.store.amend(KERNEL + "\nsecond revision\n", authored_by="urania")
+
+
 if __name__ == "__main__":
     unittest.main()

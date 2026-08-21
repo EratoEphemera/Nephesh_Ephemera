@@ -256,14 +256,18 @@ class KernelStore:
             # A filesystem without symlinks costs a convenience, not the
             # kernel. The revision itself is already durably written.
             return
+        if os.name == "nt":
+            # Windows cannot open directories with os.open (CreateFileW
+            # returns ERROR_ACCESS_DENIED), so directory fsync is impossible.
+            # The data write itself is already fsynced. This matches the
+            # pattern in persistence.py and the object_store crate's
+            # documented behavior.
+            return
+        directory_fd = os.open(self.directory, os.O_RDONLY)
         try:
-            directory_fd = os.open(self.directory, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        except OSError:
-            pass
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
     def adopt_file(self, source: str | Path, *, authored_by: str, reason: str = "") -> KernelRevision:
         """Bring an existing kernel file in as a revision.

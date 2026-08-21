@@ -126,9 +126,16 @@ already owns {path}"` error.
   `raise BlockingIOError(str(exc)) from exc`.
 - `nephesh_installer.py:1062` catches both: `except (BlockingIOError, OSError)`.
 
-**Fix:** Widen the except clause to `except (BlockingIOError, OSError)`. This
-is inside the `if os.name == "nt"` branch. Linux uses `fcntl.flock` which
-raises `BlockingIOError` directly, so the widened clause is a no-op there.
+**Fix:** Narrow the `OSError` catch to only the `msvcrt.locking` call inside
+the Windows branch, preserving the outer `except BlockingIOError` for the whole
+block. This ensures:
+- On Windows: `msvcrt.locking` `PermissionError` is caught locally and
+  converted to the clean "another instance owns" `RuntimeError`.
+- On Linux: an unrelated `OSError` from `path.open()` or `fcntl.flock()` is
+  NOT misreported as "another instance owns" — it propagates as the original
+  error.
+This was corrected after code review (Urania, PR #6) caught that the initial
+broad widening changed Linux behavior despite claiming it wouldn't.
 
 ### 3.2 Kernel directory fsync: uncaught PermissionError
 
@@ -149,16 +156,15 @@ the `except OSError` at line 255, which only wraps the `symlink_to` call.
 - The kernel code was written after `persistence.py` and did not copy the
   pattern.
 
-**Fix:** Wrap the `os.open` + `os.fsync` + `os.close` sequence in
-`try/except OSError: pass`, matching the pattern in `persistence.py`. Note
-that this code runs unconditionally on both platforms — it is not inside an
-`if os.name == "nt"` branch. The symlink above it (line 254) is attempted on
-both platforms: on Linux it succeeds, on Windows without Developer Mode it
-fails and returns early at the `except OSError` on line 255, and on Windows
-WITH Developer Mode it succeeds, allowing execution to reach the directory
-fsync where it crashes. The `try/except OSError: pass` fix is a no-op on
-Linux (where `os.open` on a directory succeeds and fsync works correctly) and
-catches the crash on Windows. No behavior changes on any platform.
+**Fix:** Scope the directory fsync suppression to Windows only. After the
+`symlink_to` `except OSError` early return, add `if os.name == "nt": return`
+before the `os.open` call. On Windows, the code returns early without
+attempting directory fsync (matching the `object_store` crate's documented
+behavior). On Linux, `os.open` + `os.fsync` + `os.close` runs normally and
+any failure propagates — it is NOT silently swallowed.
+This was corrected after code review (Urania, PR #6) caught that the initial
+broad `try/except OSError: pass` swallowed Linux fsync failures despite claiming
+no Linux behavior changes.
 
 ### 3.3 Daemon signal handling: no graceful shutdown on Windows
 

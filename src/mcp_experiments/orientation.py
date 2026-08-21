@@ -161,7 +161,16 @@ def _resolve_annotations(fn: Callable[..., Any]) -> dict[str, Any]:
         module = importlib.import_module(fn.__module__)
         globalns = getattr(module, "__dict__", {})
         return typing.get_type_hints(fn, globalns=globalns)
-    except Exception:
-        # If resolution fails for any reason, fall back to the raw string
-        # annotations. The warning is non-fatal and the tool still works.
+    except (ImportError, NameError, TypeError, AttributeError):
+        # Resolution failed: the module could not be imported, a forward
+        # reference could not be resolved, or the annotations were not
+        # introspectable. Fall back to raw string annotations so the tool
+        # still works, but emit a warning so a silent regression is visible.
+        import warnings
+        warnings.warn(
+            f"Could not resolve type hints for {fn.__name__} from "
+            f"module {fn.__module__}: falling back to string annotations. "
+            f"The Pydantic schema may show an unresolved forward reference.",
+            stacklevel=2,
+        )
         return raw_annotations.copy()

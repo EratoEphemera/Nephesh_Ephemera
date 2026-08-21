@@ -4,19 +4,23 @@
 
 ### Fixed
 
-- Server instance lock on Windows: `except BlockingIOError` widened to
-  `except (BlockingIOError, OSError)` so `msvcrt.locking` contention raises
-  a clean error instead of an uncaught `PermissionError` traceback.
-- Kernel directory fsync: `os.open` on a directory (which raises
-  `PermissionError` on Windows) now wrapped in `try/except OSError`, matching
-  the pattern already used in `persistence.py`.
+- Server instance lock on Windows: `OSError` from `msvcrt.locking` contention
+  is now caught locally inside the Windows branch and converted to a clean
+  "another instance owns" error, while preserving Linux `fcntl.flock`
+  `BlockingIOError` semantics and allowing unrelated `OSError` from `path.open`
+  to propagate on both platforms.
+- Kernel directory fsync on Windows: the directory fsync call is now skipped
+  on Windows (where `os.open` on a directory raises `PermissionError`), while
+  preserving Linux `os.fsync` failure propagation. The Windows early return
+  matches the `object_store` crate's documented behavior.
 - Daemon signal handling on Windows: `signal.signal` fallback registered when
   `loop.add_signal_handler` raises `NotImplementedError` on
   `ProactorEventLoop`, restoring Ctrl+C graceful shutdown.
 - Pydantic forward-reference warning for `nephesh_time` schema: string
   annotations are now resolved against the original tool module's namespace
   before being set on the orientation wrapper, eliminating the unresolved
-  forward-reference warning on all platforms.
+  forward-reference warning on all platforms. The fallback emits a visible
+  warning if resolution fails rather than silently degrading.
 - Snapshot memory export: file opened with `encoding="utf-8"` so non-ASCII
   memory content does not crash the export on Windows.
 - Daemon dream consumer command: `shlex.split` now uses `posix=False` on
@@ -37,6 +41,12 @@
 ### Verification
 
 - All modified Python files pass `py_compile` on native Windows 11.
+- Regression tests added: `test_instance_lock.py` (Windows lock contention,
+  Linux error distinguishability, Linux unrelated OSError propagation),
+  `test_orientation.py` (annotation resolution for `nephesh_time` schema,
+  fallback warning on resolution failure),
+  `test_kernel.py` (Linux fsync failure propagation, Windows directory-open
+  skip).
 - No code path consumed by Linux was altered; all fixes are inside
   `if os.name == "nt"` branches, Windows-only `except` clauses, or
   `encoding="utf-8"` additions that are no-ops on Linux (where UTF-8 is
