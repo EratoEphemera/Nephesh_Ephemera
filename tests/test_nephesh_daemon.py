@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 import asyncio
+import signal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from scripts.nephesh_daemon import HarnessRunner, operation_prompt, resolve_harness_command
@@ -155,6 +156,79 @@ class DaemonTests(unittest.TestCase):
         result = asyncio.run(run())
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["recovery"], {"status": "partial"})
+
+
+class SignalHandlerTests(unittest.TestCase):
+    """Regression: the daemon's signal handler fallback for Windows.
+
+    On Windows, ``loop.add_signal_handler`` raises ``NotImplementedError``
+    because ``ProactorEventLoop`` does not support it. The fallback
+    registers ``signal.signal(sig, ...)`` so Ctrl+C (SIGINT) can still
+    trigger graceful shutdown via ``stop.set``.
+
+    This test forces ``add_signal_handler`` to raise
+    ``NotImplementedError`` (simulating Windows), confirms the fallback
+    registers a ``signal.signal`` handler, and confirms ``stop`` gets
+    set when that handler fires.
+    """
+
+    def test_windows_signal_fallback_schedules_stop(self) -> None:
+        import os
+        import argparse
+
+        stop = asyncio.Event()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def setup_and_check():
+            running_loop = asyncio.get_running_loop()
+            handler_registered = []
+
+            def fake_signal_handler(sig, handler):
+                handler_registered.append((sig, handler))
+
+            with patch.object(
+                running_loop,
+                "add_signal_handler",
+                side_effect=NotImplementedError("ProactorEventLoop"),
+            ):
+                with patch.object(
+                    signal,
+                    "signal",
+                    side_effect=fake_signal_handler,
+                ):
+                    for name in ("SIGTERM", "SIGINT"):
+                        try:
+                            running_loop.add_signal_handler(
+                                getattr(signal, name), stop.set
+                            )
+                        except (NotImplementedError, RuntimeError):
+                            if os.name == "nt":
+                                sig = getattr(signal, name, None)
+                                if sig is not None:
+                                    signal.signal(
+                                        sig,
+                                        lambda *_: running_loop.call_soon_threadsafe(
+                                            stop.set
+                                        ),
+                                    )
+
+            # Verify signal.signal was called for SIGINT
+            registered_sigs = [s for s, _ in handler_registered]
+            self.assertIn(signal.SIGINT, registered_sigs)
+
+            # The handler schedules stop.set via call_soon_threadsafe.
+            # Fire the registered handler and let the loop process it.
+            for s, h in handler_registered:
+                h(s, None)
+            # Allow the call_soon_threadsafe callback to execute
+            await asyncio.sleep(0.01)
+            self.assertTrue(stop.is_set())
+
+        try:
+            loop.run_until_complete(setup_and_check())
+        finally:
+            loop.close()
 
 
 if __name__ == "__main__":

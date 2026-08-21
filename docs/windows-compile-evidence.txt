@@ -1,0 +1,28 @@
+﻿=== py_compile evidence ===
+OK: src\mcp_experiments\server.py
+OK: src\mcp_experiments\kernel.py
+OK: src\mcp_experiments\orientation.py
+OK: src\mcp_experiments\platform_runtime.py
+OK: src\mcp_experiments\results.py
+OK: src\mcp_experiments\tools\info.py
+OK: scripts\nephesh_daemon.py
+OK: scripts\nephesh_installer.py
+OK: scripts\snapshot.py
+OK: tests\test_orientation.py
+OK: tests\test_kernel.py
+OK: tests\test_instance_lock.py
+OK: tests\test_nephesh_daemon.py
+OK: tests\test_tls_config.py
+OK: tests\test_nephesh_installer.py
+OK: tests\test_windows_runtime.py
+OK: tests\test_projection_boundary.py
+OK: tests\test_projection_lifecycle.py
+OK: tests\test_dreaming_tools.py
+OK: tests\test_heartbeat_tools.py
+OK: tests\test_persistence_repository.py
+OK: tests\test_durability.py
+
+=== nephesh_info floor version check ===
+floor.version: 5.3.3-truthful-floor (verified via live MCP tool call)
+installed_version: 5.3.3 (verified via live MCP tool call)
+Pydantic nephesh_time warning: resolved (no warning emitted on server startup with 5.3.3 code)
