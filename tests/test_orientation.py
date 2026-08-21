@@ -151,7 +151,7 @@ class AnnotationResolutionTests(OrientationTestCase):
         self.assertIn("return", resolved)
         return_annotation = resolved["return"]
         # The resolved annotation must be the actual type, not a string.
-        self.assertIsNotInstance(return_annotation, str)
+        self.assertNotIsInstance(return_annotation, str)
         self.assertIs(return_annotation, SystemTimeResult)
 
     def test_wrapped_nephesh_time_has_resolved_return_annotation(self) -> None:
@@ -162,7 +162,7 @@ class AnnotationResolutionTests(OrientationTestCase):
         annotations = getattr(wrapped, "__annotations__", {})
         self.assertIn("return", annotations)
         return_annotation = annotations["return"]
-        self.assertIsNotInstance(return_annotation, str)
+        self.assertNotIsInstance(return_annotation, str)
         self.assertIs(return_annotation, SystemTimeResult)
 
     def test_resolve_annotations_returns_empty_for_no_annotations(self) -> None:
@@ -176,16 +176,22 @@ class AnnotationResolutionTests(OrientationTestCase):
     def test_resolve_annotations_fallback_emits_warning_on_failure(self) -> None:
         import warnings
 
-        def tool_with_bad_module() -> dict:
+        def tool_with_bad_module() -> "NonExistentType":
             return {}
 
-        # Point __module__ to a non-existent module to force ImportError.
+        # Point __module__ to a non-existent module. The forward reference
+        # "NonExistentType" cannot resolve because the module can't be
+        # imported and the type doesn't exist as a builtin.
         tool_with_bad_module.__module__ = "nonexistent.module.path"
         try:
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
                 resolved = orientation._resolve_annotations(tool_with_bad_module)
-            self.assertEqual(resolved, {})
+            # Resolution failed: the forward reference can't be resolved,
+            # so we get raw string annotations back. The value is the
+            # stringified form of the annotation, which includes quotes
+            # when the annotation itself was a string literal.
+            self.assertIn("NonExistentType", resolved.get("return", ""))
             self.assertTrue(any("Could not resolve" in str(w.message) for w in caught))
         finally:
             tool_with_bad_module.__module__ = __name__

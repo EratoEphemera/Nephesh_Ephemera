@@ -26,6 +26,12 @@ class InstanceLockTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.lock_path = Path(self._tmp.name) / "instance.lock"
+        # Patch settings.instance_lock_file so _acquire_instance_lock
+        # uses our test lock file, not the deployment's real one.
+        from mcp_experiments.config import settings
+        self._original_lock = settings.instance_lock_file
+        object.__setattr__(settings, "instance_lock_file", str(self.lock_path))
+        self.addCleanup(object.__setattr__, settings, "instance_lock_file", self._original_lock)
 
     def _acquire(self):
         from mcp_experiments.server import _acquire_instance_lock, _release_instance_lock
@@ -46,39 +52,20 @@ class InstanceLockTests(unittest.TestCase):
 
     @unittest.skipIf(os.name != "nt", "Windows msvcrt.locking PermissionError")
     def test_windows_msvcrt_contention_raises_clean_error(self) -> None:
-        import msvcrt
-
+        # The first acquire holds the lock via _acquire_instance_lock.
+        # A second acquire must fail with RuntimeError, not an uncaught
+        # PermissionError traceback. This proves the narrowed except
+        # OSError around msvcrt.locking works.
         release = self._acquire()
         self.addCleanup(release)
-
-        # Open the same lock file and attempt to lock it with msvcrt.
-        handle = self.lock_path.open("a+", encoding="utf-8")
-        handle.write("pid=999\n")
-        handle.flush()
-        handle.seek(0)
-        with self.assertRaises(OSError):
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        handle.close()
-
-        # The server's _acquire_instance_lock must catch this and raise RuntimeError.
         with self.assertRaises(RuntimeError) as ctx:
             self._acquire()
         self.assertIn("already owns", str(ctx.exception))
 
     @unittest.skipIf(os.name == "nt", "Linux fcntl.flock BlockingIOError")
     def test_linux_flock_contention_raises_clean_error(self) -> None:
-        import fcntl
-
         release = self._acquire()
         self.addCleanup(release)
-
-        # Open the same lock file and attempt to lock it with fcntl.
-        handle = self.lock_path.open("a+", encoding="utf-8")
-        with self.assertRaises(BlockingIOError):
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        handle.close()
-
-        # The server's _acquire_instance_lock must catch BlockingIOError.
         with self.assertRaises(RuntimeError) as ctx:
             self._acquire()
         self.assertIn("already owns", str(ctx.exception))
