@@ -33,11 +33,24 @@ This branch has four coordinated goals:
 No live deployment, sister body, schedule, memory collection, or external
 service is changed by drafting or reviewing this document.
 
-No code path that Linux currently consumes may be altered. All fixes are
+No Linux behavior is regressed by this release. Most fixes are
 inside `if os.name == "nt"` branches, inside `except` clauses that only fire
-on Windows, or in test guards that are no-ops on Linux. The one exception is
-`encoding="utf-8"` additions to `read_text()`/`write_text()` calls in the
-installer, which are no-ops on Linux (where the default is already UTF-8).
+on Windows, or in test guards that are no-ops on Linux. The following shared,
+cross-platform files are deliberate exceptions — they change Linux startup/schema
+behavior intentionally and are listed here for full transparency:
+
+- **`src/mcp_experiments/orientation.py`** — the `_resolve_annotations`
+  helper and `wrap` changes resolve string annotations against the original
+  tool module's namespace on all platforms. This eliminates the
+  `nephesh_time` Pydantic forward-reference warning on Linux as well as
+  Windows. No Linux behavior is regressed; the schema is improved on both.
+- **`src/mcp_experiments/results.py`** — TypedDict definitions reordered to
+  move `FloorCheck` and `TruthfulFloor` above `HealthResult`, eliminating a
+  forward reference. This is a code-quality cleanup with no behavioral change on
+  either platform.
+- **`encoding="utf-8"` additions** to `read_text()`/`write_text()` calls in
+  the installer and lock files — no-ops on Linux (where the default is already
+  UTF-8).
 
 ### Non-goals
 
