@@ -197,21 +197,24 @@ class SignalHandlerTests(unittest.TestCase):
                     "signal",
                     side_effect=fake_signal_handler,
                 ):
-                    for name in ("SIGTERM", "SIGINT"):
-                        try:
-                            running_loop.add_signal_handler(
-                                getattr(signal, name), stop.set
-                            )
-                        except (NotImplementedError, RuntimeError):
-                            if os.name == "nt":
-                                sig = getattr(signal, name, None)
-                                if sig is not None:
-                                    signal.signal(
-                                        sig,
-                                        lambda *_: running_loop.call_soon_threadsafe(
-                                            stop.set
-                                        ),
-                                    )
+                    # Simulate Windows: patch os.name so the
+                    # if os.name == "nt" fallback branch is taken.
+                    with patch.object(os, "name", "nt"):
+                        for name in ("SIGTERM", "SIGINT"):
+                            try:
+                                running_loop.add_signal_handler(
+                                    getattr(signal, name), stop.set
+                                )
+                            except (NotImplementedError, RuntimeError):
+                                if os.name == "nt":
+                                    sig = getattr(signal, name, None)
+                                    if sig is not None:
+                                        signal.signal(
+                                            sig,
+                                            lambda *_: running_loop.call_soon_threadsafe(
+                                                stop.set
+                                            ),
+                                        )
 
             # Verify signal.signal was called for SIGINT
             registered_sigs = [s for s, _ in handler_registered]
@@ -221,7 +224,6 @@ class SignalHandlerTests(unittest.TestCase):
             # Fire the registered handler and let the loop process it.
             for s, h in handler_registered:
                 h(s, None)
-            # Allow the call_soon_threadsafe callback to execute
             await asyncio.sleep(0.01)
             self.assertTrue(stop.is_set())
 

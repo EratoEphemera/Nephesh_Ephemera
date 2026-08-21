@@ -20,7 +20,11 @@
   annotations are now resolved against the original tool module's namespace
   before being set on the orientation wrapper, eliminating the unresolved
   forward-reference warning on all platforms. The fallback emits a visible
-  warning if resolution fails rather than silently degrading.
+  warning if resolution fails rather than silently degrading. This is
+  distinct from the separate `IncompleteFieldDefinitionWarning` for the
+  `lifespan` field emitted by the `mcp` library's `FastMCP.Settings`
+  pydantic model — that warning originates in a dependency, not in Nephesh
+  code, and is not addressed by this release.
 - Snapshot memory export: file opened with `encoding="utf-8"` so non-ASCII
   memory content does not crash the export on Windows.
 - Daemon dream consumer command: `shlex.split` now uses `posix=False` on

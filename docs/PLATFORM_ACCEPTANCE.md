@@ -44,6 +44,13 @@ resolves string annotations against the original tool module's namespace before
 setting them on the wrapper, so Pydantic sees real types instead of
 unresolvable forward-reference strings.
 
+A separate `IncompleteFieldDefinitionWarning` for the `lifespan` field
+remains visible in the startup output. This warning originates in the `mcp`
+library's `FastMCP.Settings` pydantic model (a dependency), not in Nephesh
+code. It is not addressed by this release and is recorded as a known
+dependency-level non-blocking warning, distinct from the `nephesh_time`
+fix which is fully resolved.
+
 ## Ubuntu 24.04+ — installer-accommodated, untested
 
 The installer accommodates Ubuntu 24.04+ through its explicit OS gate and the
