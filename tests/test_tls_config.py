@@ -65,14 +65,14 @@ class TlsConfigTests(unittest.TestCase):
             with self.assertRaises(TlsConfigError):
                 resolve_tls(True, directory, directory)
 
-    @unittest.skipIf(os.geteuid() == 0, "root bypasses file permissions")
+    @unittest.skipIf(getattr(os, "geteuid", lambda: -1)() == 0, "root bypasses file permissions")
     def test_unreadable_key_refuses(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             cert = root / "cert.pem"
             key = root / "key.pem"
-            cert.write_text("not a real certificate\n")
-            key.write_text("not a real key\n")
+            cert.write_text("not a real certificate\n", encoding="utf-8")
+            key.write_text("not a real key\n", encoding="utf-8")
             key.chmod(0o000)
             try:
                 with self.assertRaises(TlsConfigError):
@@ -85,8 +85,8 @@ class TlsConfigTests(unittest.TestCase):
             root = Path(directory)
             cert = root / "cert.pem"
             key = root / "key.pem"
-            cert.write_text("-----BEGIN CERTIFICATE-----\nnonsense\n-----END CERTIFICATE-----\n")
-            key.write_text("-----BEGIN PRIVATE KEY-----\nnonsense\n-----END PRIVATE KEY-----\n")
+            cert.write_text("-----BEGIN CERTIFICATE-----\nnonsense\n-----END CERTIFICATE-----\n", encoding="utf-8")
+            key.write_text("-----BEGIN PRIVATE KEY-----\nnonsense\n-----END PRIVATE KEY-----\n", encoding="utf-8")
             with self.assertRaises(TlsConfigError):
                 resolve_tls(True, str(cert), str(key))
 

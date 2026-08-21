@@ -26,7 +26,9 @@ direction: a redundant identity block costs tokens, a missing one costs a self.
 from __future__ import annotations
 
 import functools
+import importlib
 import inspect
+import typing
 from typing import Any, Callable
 
 from .config import settings
@@ -104,15 +106,27 @@ def _attach(result: Any) -> Any:
 
 
 def wrap(fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Wrap a tool so its first response in a process carries the kernel.
+    """Wrap a tool so its first response in this process carries the kernel.
 
     functools.wraps preserves the signature FastMCP introspects to build the
     tool schema, so wrapping is invisible to the protocol.
+
+    Because ``from __future__ import annotations`` stores annotations as
+    strings, a wrapper's ``__globals__`` no longer contains the types those
+    strings reference. Pydantic/FastMCP resolves forward references by looking
+    in the function's ``__globals__``, so a wrapper whose globals belong to
+    this module (rather than the original tool module) produces an unresolved
+    forward-reference warning. We resolve the original function's type hints
+    in its own module's namespace and set the resolved (non-string) annotations
+    on the wrapper, so the wrapping is truly invisible to the schema builder.
     """
+    resolved_annotations = _resolve_annotations(fn)
+
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             return _attach(await fn(*args, **kwargs))
+        async_wrapper.__annotations__ = resolved_annotations
         return async_wrapper
 
     def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -126,6 +140,37 @@ def wrap(fn: Callable[..., Any]) -> Callable[..., Any]:
     wrapper.__qualname__ = fn.__qualname__
     wrapper.__module__ = fn.__module__
     wrapper.__doc__ = fn.__doc__
-    wrapper.__annotations__ = getattr(fn, "__annotations__", {}).copy()
+    wrapper.__annotations__ = resolved_annotations
     wrapper.__signature__ = inspect.signature(fn)
     return wrapper
+
+
+def _resolve_annotations(fn: Callable[..., Any]) -> dict[str, Any]:
+    """Resolve string annotations using the original function's module globals.
+
+    With ``from __future__ import annotations``, all annotations are stored as
+    strings. ``typing.get_type_hints`` resolves them against the function's
+    ``__globals__``. After double-wrapping, ``__globals__`` belongs to the
+    wrapper's module, not the original. We resolve against the original
+    module's namespace so Pydantic sees real types, not unresolvable strings.
+    """
+    raw_annotations = getattr(fn, "__annotations__", {})
+    if not raw_annotations:
+        return {}
+    try:
+        module = importlib.import_module(fn.__module__)
+        globalns = getattr(module, "__dict__", {})
+        return typing.get_type_hints(fn, globalns=globalns)
+    except (ImportError, NameError, TypeError, AttributeError):
+        # Resolution failed: the module could not be imported, a forward
+        # reference could not be resolved, or the annotations were not
+        # introspectable. Fall back to raw string annotations so the tool
+        # still works, but emit a warning so a silent regression is visible.
+        import warnings
+        warnings.warn(
+            f"Could not resolve type hints for {fn.__name__} from "
+            f"module {fn.__module__}: falling back to string annotations. "
+            f"The Pydantic schema may show an unresolved forward reference.",
+            stacklevel=2,
+        )
+        return raw_annotations.copy()

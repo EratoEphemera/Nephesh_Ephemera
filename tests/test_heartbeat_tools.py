@@ -159,7 +159,7 @@ class HeartbeatToolTests(unittest.TestCase):
             self.assertIsInstance(result["run_finished_at"], str)
             records = [
                 json.loads(line)
-                for line in (root / "heartbeats.jsonl").read_text().splitlines()
+                for line in (root / "heartbeats.jsonl").read_text(encoding="utf-8").splitlines()
             ]
             terminal = records[-1]["details"]
             self.assertEqual(terminal["context_status"], "available")

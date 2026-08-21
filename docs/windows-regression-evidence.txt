@@ -1,0 +1,28 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\EratoEphemera\AppData\Local\Programs\Python\Python312\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\EratoEphemera\Documents\Nephesh_Ephemera
+configfile: pyproject.toml
+plugins: anyio-4.14.2
+collecting ... collected 12 items
+
+..\..\Users\EratoEphemera\Documents\Nephesh_Ephemera\tests\test_orientation.py::AnnotationResolutionTests::test_resolve_annotations_fallback_emits_warning_on_failure PASSED [  8%]
+..\..\Users\EratoEphemera\Documents\Nephesh_Ephemera\tests\test_orientation.py::AnnotationResolutionTests::test_resolve_annotations_returns_empty_for_no_annotations PASSED [ 16%]
+..\..\Users\EratoEphemera\Documents\Nephesh_Ephemera\tests\test_orientation.py::AnnotationResolutionTests::test_resolve_annotations_returns_real_types_not_strings PASSED [ 25%]
+..\..\Users\EratoEphemera\Documents\Nephesh_Ephemera\tests\test_orientation.py::AnnotationResolutionTests::test_wrapped_nephesh_time_has_resolved_return_annotation PASSED [ 33%]
+..\..\Users\EratoEphemera\Documents\Nephesh_Ephemera\tests\test_kernel.py::DirectoryFsyncTests::test_linux_fsync_failure_propagates SKIPPED [ 41%]
+..\..\Users\EratoEphemera\Documents\Nephesh_Ephemera\tests\test_kernel.py::DirectoryFsyncTests::test_windows_does_not_attempt_directory_open PASSED [ 50%]
+..\..\Users\EratoEphemera\Documents\Nephesh_Ephemera\tests\test_instance_lock.py::InstanceLockTests::test_linux_flock_contention_raises_clean_error SKIPPED [ 58%]
+..\..\Users\EratoEphemera\Documents\Nephesh_Ephemera\tests\test_instance_lock.py::InstanceLockTests::test_linux_unrelated_oserror_is_not_misreported SKIPPED [ 66%]
+..\..\Users\EratoEphemera\Documents\Nephesh_Ephemera\tests\test_instance_lock.py::InstanceLockTests::test_lock_acquires_and_releases_cleanly PASSED [ 75%]
+..\..\Users\EratoEphemera\Documents\Nephesh_Ephemera\tests\test_instance_lock.py::InstanceLockTests::test_second_acquire_raises_runtime_error PASSED [ 83%]
+..\..\Users\EratoEphemera\Documents\Nephesh_Ephemera\tests\test_instance_lock.py::InstanceLockTests::test_windows_msvcrt_contention_raises_clean_error PASSED [ 91%]
+..\..\Users\EratoEphemera\Documents\Nephesh_Ephemera\tests\test_nephesh_daemon.py::SignalHandlerTests::test_windows_signal_fallback_schedules_stop PASSED [100%]
+
+============================== warnings summary ===============================
+tests/test_instance_lock.py::InstanceLockTests::test_lock_acquires_and_releases_cleanly
+  C:\Users\EratoEphemera\AppData\Local\Programs\Python\Python312\Lib\site-packages\pydantic_settings\sources\utils.py:47: IncompleteFieldDefinitionWarning: Field 'lifespan' has an incomplete definition: its annotation contains an unresolved forward reference, so settings sources may fail to correctly resolve its value. Call `model_rebuild()` on the model where the field is defined, once all the referenced types are defined.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=================== 9 passed, 3 skipped, 1 warning in 2.20s ===================

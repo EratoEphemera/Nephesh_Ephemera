@@ -33,9 +33,9 @@ class WindowsRuntimeTests(unittest.TestCase):
             release = root / "releases" / "source-1"
             release.mkdir(parents=True)
             (root / "config").mkdir()
-            (root / "config" / "nephesh.env").write_text("MCP_PORT=61080\n")
+            (root / "config" / "nephesh.env").write_text("MCP_PORT=61080\n", encoding="utf-8")
             (root / "runtime" / "venv" / "Scripts").mkdir(parents=True)
-            (root / "runtime" / "venv" / "Scripts" / "python.exe").write_text("")
+            (root / "runtime" / "venv" / "Scripts" / "python.exe").write_text("", encoding="utf-8")
             with patch.object(installer.os, "name", "nt"):
                 installer.switch_current(root, release, dry_run=False)
                 checks = installer.verify(root, dry_run=False)

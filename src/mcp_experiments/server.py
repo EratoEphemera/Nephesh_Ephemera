@@ -90,13 +90,19 @@ def _acquire_instance_lock() -> None:
     path = Path(settings.instance_lock_file).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        handle = path.open("a+")
+        handle = path.open("a+", encoding="utf-8")
         if os.name == "nt":
             import msvcrt
             handle.write(f"pid={os.getpid()}\n")
             handle.flush()
             handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                handle.close()
+                raise RuntimeError(
+                    f"another Nephesh instance already owns {path}"
+                ) from exc
         else:
             import fcntl
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)

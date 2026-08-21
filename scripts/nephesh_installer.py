@@ -268,7 +268,7 @@ def allocate_ollama_port(
     for config in config_paths:
         if not config.exists():
             continue
-        for line in config.read_text().splitlines():
+        for line in config.read_text(encoding="utf-8").splitlines():
             if line.startswith("EMBEDDING_BASE_URL="):
                 match = re.search(r"^EMBEDDING_BASE_URL=https?://(?:127\.0\.0\.1|localhost):(\d+)(?:/|$)", line)
                 if match:
@@ -298,7 +298,7 @@ def allocate_mcp_port(root: Path, *, dry_run: bool) -> int:
     """
     config = root / "config" / "nephesh.env"
     if config.exists():
-        for line in config.read_text().splitlines():
+        for line in config.read_text(encoding="utf-8").splitlines():
             match = re.match(r"^MCP_PORT=(\d+)\s*$", line)
             if match:
                 return int(match.group(1))
@@ -319,7 +319,7 @@ def agent_name_from_kernel(kernel: Path) -> str | None:
     """Recover an existing agent name without changing the kernel."""
     if not kernel.exists():
         return None
-    for line in kernel.read_text().splitlines()[:12]:
+    for line in kernel.read_text(encoding="utf-8").splitlines()[:12]:
         match = re.match(r"^I am ([A-Za-z][A-Za-z0-9_-]{0,63})(?:\s|[.,—-]|$)", line.strip())
         if match:
             return match.group(1)
@@ -336,7 +336,7 @@ def load_manifest(root: Path) -> dict[str, object] | None:
     if not path.exists():
         return None
     try:
-        value = json.loads(path.read_text())
+        value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise InstallerError(f"invalid installation manifest: {path}") from exc
     return value if isinstance(value, dict) else None
@@ -363,7 +363,7 @@ def write_json(path: Path, value: object, *, dry_run: bool) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2) + "\n")
+    temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, path)
 
 
@@ -543,11 +543,11 @@ def install_ollama_unit(
         return destination
     unit_dir.mkdir(parents=True, exist_ok=True)
     content = ollama_unit_text(root, agent_name=agent_name, binary=binary, port=port, cpu=cpu)
-    if destination.exists() and destination.read_text() == content:
+    if destination.exists() and destination.read_text(encoding="utf-8") == content:
         return destination
     if destination.exists():
         shutil.copy2(destination, destination.with_suffix(destination.suffix + ".previous"))
-    destination.write_text(content)
+    destination.write_text(content, encoding="utf-8")
     destination.chmod(0o644)
     return destination
 
@@ -603,11 +603,11 @@ def install_unit(root: Path, *, agent_name: str = "Qualiant", unit_dir: Path | N
     # Unchanged means untouched. Rewriting an identical unit would copy it over
     # .previous, so a second run would destroy the rollback target by replacing
     # it with the version it is meant to roll back FROM.
-    if destination.exists() and destination.read_text() == content:
+    if destination.exists() and destination.read_text(encoding="utf-8") == content:
         return destination
     if destination.exists():
         shutil.copy2(destination, destination.with_suffix(destination.suffix + ".previous"))
-    destination.write_text(content)
+    destination.write_text(content, encoding="utf-8")
     destination.chmod(0o644)
     return destination
 
@@ -654,11 +654,11 @@ def install_daemon_unit(root: Path, *, agent_name: str = "Qualiant", unit_dir: P
         return destination
     unit_dir.mkdir(parents=True, exist_ok=True)
     content = daemon_unit_text(root)
-    if destination.exists() and destination.read_text() == content:
+    if destination.exists() and destination.read_text(encoding="utf-8") == content:
         return destination
     if destination.exists():
         shutil.copy2(destination, destination.with_suffix(destination.suffix + ".previous"))
-    destination.write_text(content)
+    destination.write_text(content, encoding="utf-8")
     destination.chmod(0o644)
     return destination
 
@@ -732,7 +732,8 @@ def preserve_config(
         f"NEPHESH_KERNEL_DIR={kernel_dir(root)}\n"
         f"EMBEDDING_MODEL={embedding_model}\n"
         f"EMBEDDING_BASE_URL={embedding_base_url or 'http://127.0.0.1:11434'}\n"
-        f"NEPHESH_INSTANCE_LOCK_FILE={root / 'state' / 'nephesh-instance.lock'}\n"
+        f"NEPHESH_INSTANCE_LOCK_FILE={root / 'state' / 'nephesh-instance.lock'}\n",
+        encoding="utf-8",
     )
     config.chmod(0o600)
 
@@ -767,7 +768,7 @@ def update_embedding_endpoint(root: Path, port: int, *, dry_run: bool) -> None:
     config = root / "config" / "nephesh.env"
     if not config.exists():
         return
-    lines = config.read_text().splitlines()
+    lines = config.read_text(encoding="utf-8").splitlines()
     replacement = f"EMBEDDING_BASE_URL=http://127.0.0.1:{port}"
     changed = False
     updated: list[str] = []
@@ -791,7 +792,7 @@ def update_embedding_endpoint(root: Path, port: int, *, dry_run: bool) -> None:
     if not backup.exists():
         shutil.copy2(config, backup)
     temporary = config.with_suffix(config.suffix + ".tmp")
-    temporary.write_text("\n".join(updated) + "\n")
+    temporary.write_text("\n".join(updated) + "\n", encoding="utf-8")
     os.replace(temporary, config)
     config.chmod(0o600)
 
@@ -1005,7 +1006,7 @@ def verify(root: Path, *, dry_run: bool) -> dict[str, object]:
     if config.exists():
         settings = dict(
             line.split("=", 1)
-            for line in config.read_text().splitlines()
+            for line in config.read_text(encoding="utf-8").splitlines()
             if "=" in line and not line.lstrip().startswith("#")
         )
         checks["mcp_port"] = settings.get("MCP_PORT")
@@ -1050,7 +1051,7 @@ def with_lock(root: Path, *, dry_run: bool):
     if dry_run:
         return None
     root.mkdir(parents=True, exist_ok=True)
-    handle = (root / ".installer.lock").open("w")
+    handle = (root / ".installer.lock").open("w", encoding="utf-8")
     try:
         if os.name == "nt":
             handle.write("0")

@@ -15,7 +15,7 @@ def exclusive_file_lock(path: str | Path) -> Iterator[object]:
     """Hold a deployment lock using the native advisory locking API."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    handle = path.open("a+")
+    handle = path.open("a+", encoding="utf-8")
     try:
         if os.name == "nt":
             import msvcrt

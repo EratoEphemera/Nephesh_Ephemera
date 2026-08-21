@@ -147,11 +147,13 @@ class EmbeddingContractTests(unittest.TestCase):
 class BuildRowsTests(unittest.TestCase):
     def _package(self, directory: Path, *, dimensions: int = 4) -> dict:
         (directory / "records.jsonl").write_text(
-            json.dumps({"record_id": "r1", "text": "abcdefgh", "source_path": "raw/x", "type": "message"}) + "\n"
+            json.dumps({"record_id": "r1", "text": "abcdefgh", "source_path": "raw/x", "type": "message"}) + "\n",
+            encoding="utf-8",
         )
         (directory / "embedding_index.jsonl").write_text(
             json.dumps({"record_id": "r1", "chunk_index": 0, "chunk_count": 2, "row": 0, "byte_offset": 0, "chars": 4}) + "\n"
-            + json.dumps({"record_id": "r1", "chunk_index": 1, "chunk_count": 2, "row": 1, "byte_offset": 16, "chars": 4}) + "\n"
+            + json.dumps({"record_id": "r1", "chunk_index": 1, "chunk_count": 2, "row": 1, "byte_offset": 16, "chars": 4}) + "\n",
+            encoding="utf-8",
         )
         (directory / "embeddings.f32").write_bytes(
             struct.pack("<4f", 1, 0, 0, 0) + struct.pack("<4f", 0, 1, 0, 0)
@@ -193,7 +195,8 @@ class BuildRowsTests(unittest.TestCase):
             path = Path(d)
             manifest = self._package(path)
             (path / "embedding_index.jsonl").write_text(
-                json.dumps({"record_id": "ghost", "row": 0, "byte_offset": 0}) + "\n"
+                json.dumps({"record_id": "ghost", "row": 0, "byte_offset": 0}) + "\n",
+                encoding="utf-8",
             )
             (path / "embeddings.f32").write_bytes(struct.pack("<4f", 1, 0, 0, 0))
             with self.assertRaises(ProjectionError):

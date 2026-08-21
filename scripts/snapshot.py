@@ -82,7 +82,7 @@ def take_snapshot() -> tuple[Path, Path, int]:
     if coll in tables:
         table = db.open_table(coll)
         rows = table.to_arrow().to_pylist()
-        with export_path.open("w") as f:
+        with export_path.open("w", encoding="utf-8") as f:
             for row in rows:
                 record = {
                     "id": row.get("id"),

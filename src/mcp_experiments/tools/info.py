@@ -216,7 +216,7 @@ def truthful_floor(*, process_reachable: bool | None = None,
     except Exception as exc:
         checks["projection_drift"] = _check("failed", reason=str(exc), source="projection_registry_and_store_read")
 
-    return {"version": "5.3.2-truthful-floor", "checks": checks}
+    return {"version": "5.3.3-truthful-floor", "checks": checks}
 
 
 def nephesh_info() -> str:

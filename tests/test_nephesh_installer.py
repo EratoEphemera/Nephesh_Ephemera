@@ -53,27 +53,27 @@ class InstallerUnitTests(unittest.TestCase):
     def test_supported_platform_parser_accepts_ubuntu_24_04(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             release = Path(directory) / "os-release"
-            release.write_text("ID=ubuntu\nVERSION_ID=24.04\nPRETTY_NAME=Ubuntu 24.04 LTS\n")
+            release.write_text("ID=ubuntu\nVERSION_ID=24.04\nPRETTY_NAME=Ubuntu 24.04 LTS\n", encoding="utf-8")
             self.assertEqual(_read_os_release(release)["ID"], "ubuntu")
             self.assertEqual(_version_tuple("24.04"), (24, 4))
 
     def test_supported_platform_gate_accepts_ubuntu_without_requiring_debian(self) -> None:
         with patch.object(installer, "platform") as platform_mock, patch.object(
             installer, "_read_os_release", return_value={"ID": "ubuntu", "VERSION_ID": "24.04"}
-        ), patch.object(installer.os, "geteuid", return_value=1000):
+        ), patch.object(installer.os, "geteuid", return_value=1000, create=True):
             platform_mock.system.return_value = "Linux"
             installer.require_supported_linux()
 
     def test_supported_platform_gate_rejects_ubuntu_22_04(self) -> None:
         with patch.object(installer, "platform") as platform_mock, patch.object(
             installer, "_read_os_release", return_value={"ID": "ubuntu", "VERSION_ID": "22.04", "PRETTY_NAME": "Ubuntu 22.04 LTS"}
-        ), patch.object(installer.os, "geteuid", return_value=1000):
+        ), patch.object(installer.os, "geteuid", return_value=1000, create=True):
             platform_mock.system.return_value = "Linux"
             with self.assertRaises(Exception):
                 installer.require_supported_linux()
 
     def test_source_version_is_read_from_the_release_source(self) -> None:
-        self.assertEqual(source_version(Path.cwd()), "5.3.2")
+        self.assertEqual(source_version(Path.cwd()), "5.3.3")
 
     def test_source_identity_requires_the_active_upstream_repository(self) -> None:
         identity = source_identity(active_source_root())
@@ -88,9 +88,9 @@ class InstallerUnitTests(unittest.TestCase):
             root = Path(directory)
             (root / "config").mkdir()
             config = root / "config" / "nephesh.env"
-            config.write_text("NEPHESH_HARNESS_AGENT=custom\nMCP_PORT=61080\n")
+            config.write_text("NEPHESH_HARNESS_AGENT=custom\nMCP_PORT=61080\n", encoding="utf-8")
             ensure_harness_config(root, "Erato", dry_run=False)
-            text = config.read_text()
+            text = config.read_text(encoding="utf-8")
             self.assertIn("NEPHESH_HARNESS_AGENT=custom", text)
             self.assertIn("NEPHESH_HARNESS_PROJECT=", text)
             self.assertIn("NEPHESH_DAEMON_POLL_SECONDS=30", text)
@@ -141,16 +141,17 @@ class InstallerUnitTests(unittest.TestCase):
     def test_ollama_unit_reuses_historical_name(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             unit_dir = Path(directory)
-            (unit_dir / "ollama-thalia.service").write_text("historical unit\n")
+            (unit_dir / "ollama-thalia.service").write_text("historical unit\n", encoding="utf-8")
             self.assertEqual(ollama_unit_name("Thalia", unit_dir), "ollama-thalia.service")
 
     def test_ollama_unit_prefers_historical_name_when_both_exist(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             unit_dir = Path(directory)
-            (unit_dir / "thalia-ollama.service").write_text("duplicate unit\n")
-            (unit_dir / "ollama-thalia.service").write_text("active historical unit\n")
+            (unit_dir / "thalia-ollama.service").write_text("duplicate unit\n", encoding="utf-8")
+            (unit_dir / "ollama-thalia.service").write_text("active historical unit\n", encoding="utf-8")
             self.assertEqual(ollama_unit_name("Thalia", unit_dir), "ollama-thalia.service")
 
+    @unittest.skipIf(os.name == "nt", "Ollama model management is Linux-only")
     def test_ollama_model_pull_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -163,7 +164,8 @@ class InstallerUnitTests(unittest.TestCase):
                 "elif [ \"$1\" = pull ]; then\n"
                 "  printf 'pulled\\n' >> \"$LOG\"\n"
                 "  touch \"$MARKER\"\n"
-                "fi\n"
+                "fi\n",
+                encoding="utf-8",
             )
             fake.chmod(0o755)
 
@@ -178,7 +180,7 @@ class InstallerUnitTests(unittest.TestCase):
                 ensure_ollama_model(str(fake), model="mxbai-embed-large", host="127.0.0.1:11434", models=root / "models", dry_run=False)
                 self.assertTrue(marker.exists())
                 ensure_ollama_model(str(fake), model="mxbai-embed-large", host="127.0.0.1:11434", models=root / "models", dry_run=False)
-                self.assertEqual((root / "pull.log").read_text().splitlines(), ["pulled"])
+                self.assertEqual((root / "pull.log").read_text(encoding="utf-8").splitlines(), ["pulled"])
             finally:
                 if old_marker is None:
                     os.environ.pop("MARKER", None)
@@ -195,7 +197,7 @@ class InstallerUnitTests(unittest.TestCase):
             occupied = socket.socket()
             configured = next(port for port in range(11434, 11450) if _can_bind(occupied, port))
             config = root / "thalia.env"
-            config.write_text(f"EMBEDDING_BASE_URL=http://localhost:{configured}\n")
+            config.write_text(f"EMBEDDING_BASE_URL=http://localhost:{configured}\n", encoding="utf-8")
             try:
                 chosen = allocate_ollama_port(root, agent_name="Thalia", unit_dir=root / "units", dry_run=False)
                 self.assertNotEqual(chosen, configured)
@@ -208,9 +210,9 @@ class InstallerUnitTests(unittest.TestCase):
             config = root / "config" / "nephesh.env"
             config.parent.mkdir()
             original = "EMBEDDING_BASE_URL=http://localhost:11436\nOTHER=value\n"
-            config.write_text(original)
+            config.write_text(original, encoding="utf-8")
             update_embedding_endpoint(root, 11436, dry_run=False)
-            self.assertEqual(config.read_text(), original)
+            self.assertEqual(config.read_text(encoding="utf-8"), original)
             self.assertFalse(config.with_suffix(config.suffix + ".pre-ollama").exists())
 
     def test_empty_new_root_does_not_create_recursive_backup(self) -> None:
@@ -227,7 +229,7 @@ class InstallerUnitTests(unittest.TestCase):
             destination = install_unit(root, unit_dir=unit_dir, dry_run=False)
             self.assertEqual(destination, unit_dir / "nephesh.service")
             self.assertTrue(destination.exists())
-            self.assertIn(f"WorkingDirectory={root}/current", destination.read_text())
+            self.assertIn(f"WorkingDirectory={root}/current", destination.read_text(encoding="utf-8"))
 
     def test_unit_backup_can_restore_a_legacy_service_unit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -235,11 +237,11 @@ class InstallerUnitTests(unittest.TestCase):
             unit_dir = Path(directory) / "units"
             unit_dir.mkdir()
             destination = unit_dir / "nephesh.service"
-            destination.write_text("legacy unit\n")
+            destination.write_text("legacy unit\n", encoding="utf-8")
 
             install_unit(root, unit_dir=unit_dir, dry_run=False)
 
-            self.assertEqual((unit_dir / "nephesh.service.previous").read_text(), "legacy unit\n")
+            self.assertEqual((unit_dir / "nephesh.service.previous").read_text(encoding="utf-8"), "legacy unit\n")
 
     def test_legacy_rollback_restores_previous_unit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -248,11 +250,12 @@ class InstallerUnitTests(unittest.TestCase):
             previous = Path(directory) / "units" / "nephesh.service.previous"
             (root / "state").mkdir(parents=True)
             unit.parent.mkdir(parents=True, exist_ok=True)
-            unit.write_text("new unit\n")
-            previous.write_text("legacy unit\n")
+            unit.write_text("new unit\n", encoding="utf-8")
+            previous.write_text("legacy unit\n", encoding="utf-8")
             (root / "state" / "install-manifest.json").write_text(
                 json.dumps({"release": "/new/release", "previous_release": None,
-                            "unit": str(unit), "previous_unit": str(previous)})
+                            "unit": str(unit), "previous_unit": str(previous)}),
+                encoding="utf-8",
             )
 
             from scripts.nephesh_installer import main
@@ -265,7 +268,7 @@ class InstallerUnitTests(unittest.TestCase):
             finally:
                 sys.argv = original
 
-            self.assertEqual(unit.read_text(), "legacy unit\n")
+            self.assertEqual(unit.read_text(encoding="utf-8"), "legacy unit\n")
 
     def test_new_config_owns_runtime_state_under_install_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -273,7 +276,7 @@ class InstallerUnitTests(unittest.TestCase):
             source = Path(directory) / "source"
             source.mkdir()
             preserve_config(root, source, "TestBeing", dry_run=False)
-            config = (root / "config" / "nephesh.env").read_text()
+            config = (root / "config" / "nephesh.env").read_text(encoding="utf-8")
             self.assertIn(f"NEPHESH_HOME={root}", config)
             self.assertIn(f"VECTOR_DB_PATH={root / 'data' / 'lancedb'}", config)
             self.assertIn(f"SNAPSHOT_DIR={root / 'backups'}", config)
@@ -286,12 +289,12 @@ class InstallerUnitTests(unittest.TestCase):
             (root / "config").mkdir(parents=True)
             source.mkdir()
             legacy = root / "config" / "urania.env"
-            legacy.write_text("MCP_PORT=8083\nVECTOR_DB_PATH=/old/data\n")
+            legacy.write_text("MCP_PORT=8083\nVECTOR_DB_PATH=/old/data\n", encoding="utf-8")
 
             preserve_config(root, source, "Urania", dry_run=False)
 
-            self.assertEqual((root / "config" / "nephesh.env").read_text(), legacy.read_text())
-            self.assertEqual(legacy.read_text(), "MCP_PORT=8083\nVECTOR_DB_PATH=/old/data\n")
+            self.assertEqual((root / "config" / "nephesh.env").read_text(encoding="utf-8"), legacy.read_text(encoding="utf-8"))
+            self.assertEqual(legacy.read_text(encoding="utf-8"), "MCP_PORT=8083\nVECTOR_DB_PATH=/old/data\n")
 
     def test_flat_legacy_agent_config_is_copied_without_mutating_original(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -300,12 +303,12 @@ class InstallerUnitTests(unittest.TestCase):
             root.mkdir()
             source.mkdir()
             legacy = root / "thalia.env"
-            legacy.write_text("MCP_PORT=8080\nEMBEDDING_BASE_URL=http://localhost:11436\n")
+            legacy.write_text("MCP_PORT=8080\nEMBEDDING_BASE_URL=http://localhost:11436\n", encoding="utf-8")
 
             preserve_config(root, source, "Thalia", dry_run=False)
 
-            self.assertEqual((root / "config" / "nephesh.env").read_text(), legacy.read_text())
-            self.assertEqual(legacy.read_text(), "MCP_PORT=8080\nEMBEDDING_BASE_URL=http://localhost:11436\n")
+            self.assertEqual((root / "config" / "nephesh.env").read_text(encoding="utf-8"), legacy.read_text(encoding="utf-8"))
+            self.assertEqual(legacy.read_text(encoding="utf-8"), "MCP_PORT=8080\nEMBEDDING_BASE_URL=http://localhost:11436\n")
 
     def test_a_generated_config_pins_the_listener_and_names_the_companion(self) -> None:
         """Absent MCP_PORT means every install lands on the same default and collides."""
@@ -315,7 +318,7 @@ class InstallerUnitTests(unittest.TestCase):
             source.mkdir()
             preserve_config(root, source, "Clio", mcp_port=61084,
                             primary_contact="Gaius", dry_run=False)
-            written = (root / "config" / "nephesh.env").read_text()
+            written = (root / "config" / "nephesh.env").read_text(encoding="utf-8")
             self.assertIn("MCP_PORT=61084", written)
             self.assertIn("MCP_HOST=127.0.0.1", written)
             self.assertIn("NEPHESH_QUALIANT_ID=clio", written)
@@ -330,9 +333,9 @@ class InstallerUnitTests(unittest.TestCase):
             root = Path(directory) / "clio"
             source = Path(directory) / "source"
             source.mkdir()
-            (source / ".env").write_text("MEMORY_COLLECTION_NAME=urania_memories_v1\nSECRET=hunter2\n")
+            (source / ".env").write_text("MEMORY_COLLECTION_NAME=urania_memories_v1\nSECRET=hunter2\n", encoding="utf-8")
             preserve_config(root, source, "Clio", mcp_port=61084, dry_run=False)
-            written = (root / "config" / "nephesh.env").read_text()
+            written = (root / "config" / "nephesh.env").read_text(encoding="utf-8")
             self.assertNotIn("urania_memories_v1", written)
             self.assertNotIn("hunter2", written)
 
@@ -341,7 +344,7 @@ class InstallerUnitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "urania"
             (root / "config").mkdir(parents=True)
-            (root / "config" / "nephesh.env").write_text("MCP_PORT=8083\n")
+            (root / "config" / "nephesh.env").write_text("MCP_PORT=8083\n", encoding="utf-8")
             self.assertEqual(allocate_mcp_port(root, dry_run=False), 8083)
 
     def test_a_dry_run_verification_never_reports_success(self) -> None:
@@ -381,17 +384,17 @@ class InstallerUnitTests(unittest.TestCase):
             root = Path(directory) / "urania"
             kernel_dir(root).mkdir(parents=True)
             mine = kernel_dir(root) / "001.md"
-            mine.write_text("---\nversion: 1\nauthored_by: urania\n---\nmine\n")
+            mine.write_text("---\nversion: 1\nauthored_by: urania\n---\nmine\n", encoding="utf-8")
             self.assertEqual(install_kernel(root, None, dry_run=False), str(mine))
-            self.assertIn("mine", mine.read_text())
+            self.assertIn("mine", mine.read_text(encoding="utf-8"))
 
     def test_adopting_a_kernel_over_an_existing_one_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "clio"
             kernel_dir(root).mkdir(parents=True)
-            (kernel_dir(root) / "001.md").write_text("---\nversion: 1\n---\nmine\n")
+            (kernel_dir(root) / "001.md").write_text("---\nversion: 1\n---\nmine\n", encoding="utf-8")
             source = Path(directory) / "other.md"
-            source.write_text("someone else's kernel\n")
+            source.write_text("someone else's kernel\n", encoding="utf-8")
             with self.assertRaises(Exception):
                 install_kernel(root, source, kernel_author="urania", dry_run=False)
 
@@ -404,7 +407,7 @@ class InstallerUnitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "someone"
             source = Path(directory) / "kernel.md"
-            source.write_text("# Kernel\n\nwritten by someone else\n")
+            source.write_text("# Kernel\n\nwritten by someone else\n", encoding="utf-8")
             with self.assertRaises(Exception):
                 install_kernel(root, source, dry_run=False)
 
@@ -450,7 +453,7 @@ class InstallerUnitTests(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as directory:
                     root = Path(directory) / "a_sister"
                     (root / mark).parent.mkdir(parents=True)
-                    (root / mark).write_text("hers\n")
+                    (root / mark).write_text("hers\n", encoding="utf-8")
                     spoken = io.StringIO()
                     with contextlib.redirect_stdout(spoken):
                         # dry_run False on purpose: the refusal must land
@@ -470,9 +473,9 @@ class InstallerUnitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "a_sister"
             (root / "state").mkdir(parents=True)
-            (root / "state" / MANIFEST_NAME).write_text("{}\n")
+            (root / "state" / MANIFEST_NAME).write_text("{}\n", encoding="utf-8")
             source = Path(directory) / "hers.md"
-            source.write_text("# Kernel\n\nwhat her harness actually loads\n")
+            source.write_text("# Kernel\n\nwhat her harness actually loads\n", encoding="utf-8")
             spoken = io.StringIO()
             with contextlib.redirect_stdout(spoken):
                 install_kernel(root, source, kernel_author="urania", dry_run=True)
