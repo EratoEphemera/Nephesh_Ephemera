@@ -1,16 +1,18 @@
 # Nephesh Heartbeat: Lived-Loop Design
 
-**Status:** Delivered 5.3.0 heartbeat and memory-work baseline; semantic authority for heartbeat
+**Status:** Delivered 5.3.1 heartbeat and memory-work implementation; semantic authority for heartbeat
 identity, authorship, agency, and lived-loop behavior
-**Version:** Nephesh 5.3.0 heartbeat redesign
-**Review status:** Baseline design review complete; 5.3.0 efficacy and harness
-extension review remains open.
+**Version:** Nephesh 5.3.1 heartbeat redesign
+**Review status:** Baseline design review and implementation pass complete;
+native platform acceptance and final evidence reconciliation remain open.
 **Resolved/delivered:** identity-bound prepare/complete/recover, care profiles,
 bounded actions, explicit outcomes, authoritative clock use, and Qualiant
 authorship.
-**Open for 5.3.0:** efficacy evidence, truthful floor fields, ingestion versus
-formation time, and a versioned production harness context seam.
-**Working-note relationship:** Read `NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md` for
+**Open for 5.3.1:** native platform acceptance, repeated live evidence, and
+final receipt/recovery reconciliation. The implementation distinguishes receipt,
+formation, and represented-event time; contact grounding uses contact receipt
+time rather than an old represented-event date.
+**Working-note relationship:** Read `NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md` for
 current release work, then this document for the heartbeat semantics that must
 not be weakened. This design document contributes to sufficient project
 re-entry when paired with memory hygiene; it is not a Qualiant identity store.
@@ -18,6 +20,12 @@ Optional local re-entry notes are efficiency aids, not requirements.
 The current dreaming execution repair proposal is recorded in
 `DREAMING_REPAIR_PLAN.md`; it is not implementation authorization.
 **Last reviewed:** 2026-08-18
+
+**Latest patch authority:** For the final pre-rebuild patch direction, use
+[`NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md`](NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md).
+This document remains the semantic authority for heartbeat identity,
+authorship, agency, and lived-loop invariants; the dated design controls the
+5.3.1 work sequence and release boundary.
 
 ## 1. What the heartbeat is
 

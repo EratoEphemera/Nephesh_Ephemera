@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import fcntl
 import json
 import os
 import re
@@ -23,6 +22,7 @@ from mcp_experiments.config import settings
 from mcp_experiments.heartbeat import HeartbeatLedger
 from mcp_experiments.schedule import ScheduleStore, ScheduleSupervisor
 from mcp_experiments.tools import dreaming, memory
+from mcp_experiments.platform_runtime import process_spawn_kwargs, terminate_process
 
 
 def operation_prompt(claim: dict[str, Any], qualiant_id: str) -> str:
@@ -46,27 +46,7 @@ class HarnessRunner:
 
     @staticmethod
     async def _terminate(process) -> None:
-        if os.name == "posix":
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                return
-        else:
-            process.terminate()
-        try:
-            await asyncio.wait_for(process.wait(), timeout=10)
-        except asyncio.TimeoutError:
-            if os.name == "posix":
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    return
-            else:
-                process.kill()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=10)
-            except asyncio.TimeoutError:
-                pass
+        await terminate_process(process)
 
     @staticmethod
     def session_ids_from_output(output: bytes | str) -> list[str]:
@@ -107,7 +87,7 @@ class HarnessRunner:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     limit=262144,
-                    **({"start_new_session": True} if os.name == "posix" else {}),
+                    **process_spawn_kwargs(),
                 )
                 try:
                     stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
@@ -211,7 +191,7 @@ class HarnessRunner:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 limit=262144,
-                **({"start_new_session": True} if os.name == "posix" else {}),
+                **process_spawn_kwargs(),
             )
         except (OSError, ValueError) as exc:
             return await self._failed_result(claim, f"harness process could not start: {exc}")
@@ -290,7 +270,7 @@ class HarnessRunner:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 limit=262144,
-                **({"start_new_session": True} if os.name == "posix" else {}),
+                 **process_spawn_kwargs(),
             )
         except (OSError, ValueError) as exc:
             await dreaming.memory_dream_release(run_id, run_id, qualiant_id, "failure")
@@ -396,11 +376,13 @@ async def run_daemon(args: argparse.Namespace) -> None:
             pass
     lock_path = Path(settings.daemon_lock_file)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+") as lock:
-        try:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise RuntimeError(f"another Nephesh daemon owns {lock_path}") from exc
+    from mcp_experiments.platform_runtime import exclusive_file_lock
+    try:
+        lock_context = exclusive_file_lock(lock_path)
+        lock = lock_context.__enter__()
+    except BlockingIOError as exc:
+        raise RuntimeError(f"another Nephesh daemon owns {lock_path}") from exc
+    try:
         store = ScheduleStore(settings.schedule_config_file, settings.schedule_events_file)
         runner = HarnessRunner(
             command=settings.harness_command,
@@ -410,6 +392,8 @@ async def run_daemon(args: argparse.Namespace) -> None:
             timeout=args.timeout_seconds,
         )
         await ScheduleSupervisor(store, runner, poll_seconds=args.poll_seconds).run(stop)
+    finally:
+        lock_context.__exit__(None, None, None)
 
 
 def main() -> None:

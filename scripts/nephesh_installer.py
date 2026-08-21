@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install and upgrade a per-user Nephesh deployment on Debian 13+.
+"""Install and upgrade a per-user Nephesh deployment on Debian 13+ or Ubuntu 24.04+.
 
 The installer is intentionally conservative: code is staged in releases,
 configuration and data are preserved, and service restarts require --restart.
@@ -9,7 +9,6 @@ It never installs a system unit or changes another user's installation.
 from __future__ import annotations
 
 import argparse
-import fcntl
 import getpass
 import json
 import os
@@ -21,6 +20,16 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    from scripts import windows_runtime
+except ModuleNotFoundError:  # direct ``python scripts/nephesh_installer.py`` entrypoint
+    import windows_runtime
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 
 VERSION = "0.2.6"
@@ -120,6 +129,38 @@ def source_version(source: Path) -> str:
     return match.group(1)
 
 
+def active_source_root() -> Path:
+    """Return the repository containing the installer currently executing."""
+    return Path(__file__).resolve().parents[1]
+
+
+def source_identity(source: Path) -> dict[str, object]:
+    """Verify and describe the only source the active installer may stage."""
+    expected = active_source_root()
+    source = source.expanduser().resolve()
+    if source != expected:
+        raise InstallerError(
+            "source sentinel violation: the active installer may stage only "
+            f"its own upstream repository ({expected}), not {source}"
+        )
+    required = (source / "pyproject.toml", source / "src", source / "scripts" / "nephesh_installer.py")
+    missing = [str(path) for path in required if not path.exists()]
+    if missing:
+        raise InstallerError(f"active source repository is incomplete: {', '.join(missing)}")
+    try:
+        commit = subprocess.run(
+            ["git", "-c", f"safe.directory={source}", "-C", str(source), "rev-parse", "HEAD"],
+            text=True, check=True, capture_output=True,
+        ).stdout.strip()
+        dirty = bool(subprocess.run(
+            ["git", "-c", f"safe.directory={source}", "-C", str(source), "status", "--porcelain"],
+            text=True, check=True, capture_output=True,
+        ).stdout.strip())
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise InstallerError("active source repository identity could not be verified") from exc
+    return {"path": str(source), "git_commit": commit, "git_dirty": dirty}
+
+
 def run(
     command: list[str],
     *,
@@ -133,21 +174,63 @@ def run(
     return subprocess.run(command, text=True, check=check, capture_output=True, env=env)
 
 
-def require_debian13() -> None:
-    if os.geteuid() == 0:
-        raise InstallerError("run as the logged-in user, not root")
-    if platform.system() != "Linux":
-        raise InstallerError("this installer targets Debian 13+ only")
-    if Path("/etc/os-release").exists():
-        values: dict[str, str] = {}
-        for line in Path("/etc/os-release").read_text().splitlines():
-            if "=" in line:
-                key, value = line.split("=", 1)
-                values[key] = value.strip('"')
-        if values.get("ID") != "debian" or int(values.get("VERSION_ID", "0")) < 13:
-            raise InstallerError("this installer targets Debian 13 or newer")
-    else:
+def _read_os_release(path: Path = Path("/etc/os-release")) -> dict[str, str]:
+    if not path.exists():
         raise InstallerError("cannot identify the operating system")
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            values[key] = value.strip().strip('"')
+    return values
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    match = re.match(r"^(\d+)(?:\.(\d+))?", value)
+    if not match:
+        return ()
+    return tuple(int(part or 0) for part in match.groups())
+
+
+def require_supported_platform() -> None:
+    if os.name != "nt" and os.geteuid() == 0:
+        raise InstallerError("run as the logged-in user, not root")
+    if platform.system() == "Windows":
+        # Windows 11 reports the Windows 10 compatibility version through
+        # platform.win32_ver(); the build number is the reliable discriminator.
+        if sys.getwindowsversion().build < 22000:
+            raise InstallerError("this installer targets Windows 11 or newer")
+        return
+    if platform.system() != "Linux":
+        raise InstallerError("this installer targets Windows 11, Debian 13+, or Ubuntu 24.04+")
+    values = _read_os_release()
+    distro = values.get("ID", "").lower()
+    version = _version_tuple(values.get("VERSION_ID", ""))
+    minimums = {"debian": (13, 0), "ubuntu": (24, 4)}
+    minimum = minimums.get(distro)
+    if minimum is None or version < minimum:
+        rendered = values.get("PRETTY_NAME") or f"{distro or 'unknown'} {values.get('VERSION_ID', '')}".strip()
+        raise InstallerError(
+            f"unsupported operating system: {rendered}; "
+            "supported targets are Debian 13+ and Ubuntu 24.04+"
+        )
+
+
+# Compatibility alias for callers of the pre-5.3.1 helper.
+def require_debian13() -> None:
+    require_supported_platform()
+
+
+def require_supported_linux() -> None:
+    """Compatibility alias for callers that only expect a Linux target."""
+    if platform.system() != "Linux":
+        raise InstallerError("this operation requires a supported Linux target")
+    require_supported_platform()
+
+
+def venv_python_path(root: Path) -> Path:
+    """Return the platform-specific Python executable in a deployment venv."""
+    return root / "runtime" / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
 def ensure_user_path(path: Path) -> None:
@@ -156,8 +239,10 @@ def ensure_user_path(path: Path) -> None:
         raise InstallerError("installation root must be a dedicated directory")
     if not path.parent.exists():
         raise InstallerError(f"parent directory does not exist: {path.parent}")
-    if path.exists() and path.stat().st_uid != os.getuid():
+    if path.exists() and os.name != "nt" and path.stat().st_uid != os.getuid():
         raise InstallerError(f"installation root is not owned by {getpass.getuser()}: {path}")
+    if path.exists() and os.name == "nt" and not os.access(path, os.W_OK):
+        raise InstallerError(f"installation root is not writable by {getpass.getuser()}: {path}")
 
 
 def port_is_free(port: int) -> bool:
@@ -258,9 +343,9 @@ def load_manifest(root: Path) -> dict[str, object] | None:
 
 
 def check_prerequisites(*, allow_apt: bool, require_user_systemd: bool, dry_run: bool) -> None:
-    required = ["python3", "systemctl"]
+    required = ["python"] if os.name == "nt" else ["python3", "systemctl"]
     missing = [name for name in required if shutil.which(name) is None]
-    if missing and allow_apt:
+    if missing and allow_apt and os.name != "nt":
         run(["sudo", "apt-get", "update"], dry_run=dry_run)
         run(["sudo", "apt-get", "install", "-y", "python3", "python3-venv", "python3-pip", "systemd"], dry_run=dry_run)
         missing = [name for name in required if shutil.which(name) is None and not dry_run]
@@ -290,8 +375,21 @@ def copy_tree(source: Path, destination: Path, *, dry_run: bool, ignore: shutil.
 
 
 def source_ignore(directory: str, names: list[str]) -> set[str]:
-    ignored = {".git", ".venv", "data", "backups", "__pycache__", ".pytest_cache"}
-    return {name for name in names if name in ignored or name.endswith(".pyc")}
+    # A release is a code artifact, never a filesystem snapshot.  In particular
+    # do not let a source checkout's deployment state cross the sentinel into a
+    # fresh install. Dirty source code remains in scope; state does not.
+    ignored = {
+        ".git", ".venv", "data", "config", "state", "backups", "runtime",
+        "releases", "current", "logs", "__pycache__", ".pytest_cache",
+    }
+    return {
+        name
+        for name in names
+        if name in ignored
+        or name == ".env"
+        or name.startswith(".env.")
+        or name.endswith(".pyc")
+    }
 
 
 def backup_existing(root: Path, backup_root: Path, *, dry_run: bool) -> Path | None:
@@ -359,7 +457,7 @@ def import_legacy(old_root: Path, root: Path, *, dry_run: bool) -> None:
 def unit_text(root: Path) -> str:
     user = getpass.getuser()
     env = root / "config" / "nephesh.env"
-    venv_python = root / "runtime" / "venv" / "bin" / "python"
+    venv_python = venv_python_path(root)
     return f"""# Managed by the Nephesh per-user installer.
 [Unit]
 Description=Nephesh durable memory for {user}
@@ -483,13 +581,18 @@ def ensure_ollama_model(
         run([binary, "pull", model], dry_run=dry_run, env=environment)
 
 
-def install_unit(root: Path, *, unit_dir: Path | None = None, dry_run: bool) -> Path:
+def install_unit(root: Path, *, agent_name: str = "Qualiant", unit_dir: Path | None = None, dry_run: bool) -> Path:
     """Install the user unit in an explicitly selected directory.
 
     The default is the logged-in user's systemd directory for real installs.
     Tests and staging callers must pass a temporary directory; this prevents
     installer tests from ever touching the live user service.
     """
+    if os.name == "nt":
+        destination = (unit_dir or (root / "state" / "tasks")) / f"{agent_name}-nephesh.xml"
+        return windows_runtime.install_task(
+            root=root, agent=agent_name, component="server", destination=destination, dry_run=dry_run
+        )
     unit_dir = unit_dir or (Path.home() / ".config" / "systemd" / "user")
     destination = unit_dir / UNIT_NAME
     if dry_run:
@@ -512,7 +615,7 @@ def install_unit(root: Path, *, unit_dir: Path | None = None, dry_run: bool) -> 
 def daemon_unit_text(root: Path) -> str:
     user = getpass.getuser()
     env = root / "config" / "nephesh.env"
-    venv_python = root / "runtime" / "venv" / "bin" / "python"
+    venv_python = venv_python_path(root)
     return f"""# Managed by the Nephesh per-user installer.
 [Unit]
 Description=Nephesh always-on heartbeat and dreaming daemon for {user}
@@ -538,7 +641,12 @@ WantedBy=default.target
 """
 
 
-def install_daemon_unit(root: Path, *, unit_dir: Path | None = None, dry_run: bool) -> Path:
+def install_daemon_unit(root: Path, *, agent_name: str = "Qualiant", unit_dir: Path | None = None, dry_run: bool) -> Path:
+    if os.name == "nt":
+        destination = (unit_dir or (root / "state" / "tasks")) / f"{agent_name}-nephesh-daemon.xml"
+        return windows_runtime.install_task(
+            root=root, agent=agent_name, component="daemon", destination=destination, dry_run=dry_run
+        )
     unit_dir = unit_dir or (Path.home() / ".config" / "systemd" / "user")
     destination = unit_dir / DAEMON_UNIT_NAME
     if dry_run:
@@ -769,7 +877,7 @@ def install_kernel(
         print(f"would install kernel from {origin} -> {destination}/001.md")
         return None
 
-    venv_python = root / "runtime" / "venv" / "bin" / "python"
+    venv_python = venv_python_path(root)
     if not venv_python.exists():
         raise InstallerError(f"cannot install a kernel before the runtime exists: {venv_python}")
 
@@ -813,6 +921,13 @@ def switch_current(root: Path, release: Path, *, dry_run: bool) -> None:
     if dry_run:
         print(f"would atomically point {current} -> {release}")
         return
+    if os.name == "nt":
+        temporary = root / ".current.new"
+        if temporary.exists() or temporary.is_symlink():
+            temporary.unlink()
+        temporary.write_text(str(release.resolve()) + "\n", encoding="utf-8")
+        os.replace(temporary, current)
+        return
     temporary = root / ".current.new"
     if temporary.exists() or temporary.is_symlink():
         temporary.unlink()
@@ -822,10 +937,18 @@ def switch_current(root: Path, release: Path, *, dry_run: bool) -> None:
 
 def install_python(root: Path, *, source: Path, dry_run: bool) -> None:
     venv = root / "runtime" / "venv"
-    if not (venv / "bin" / "python").exists():
-        run(["python3", "-m", "venv", str(venv)], dry_run=dry_run)
-    run([str(venv / "bin" / "python"), "-m", "pip", "install", "--upgrade", "pip"], dry_run=dry_run)
-    run([str(venv / "bin" / "python"), "-m", "pip", "install", "-e", str(root / "current")], dry_run=dry_run)
+    interpreter = sys.executable if os.name == "nt" else "python3"
+    python = venv_python_path(root)
+    if not python.exists():
+        run([interpreter, "-m", "venv", str(venv)], dry_run=dry_run)
+    run([str(python), "-m", "pip", "install", "--upgrade", "pip"], dry_run=dry_run)
+    install_source = _current_release(root) if os.name == "nt" else root / "current"
+    if install_source is None:
+        raise InstallerError("cannot install the runtime before a current release is selected")
+    # Deploy the staged code as a normal installation. Editable installs keep
+    # the runtime pointed at a source tree whose contents can change underneath
+    # a release and make Windows rollback semantics ambiguous.
+    run([str(python), "-m", "pip", "install", str(install_source)], dry_run=dry_run)
 
 
 def verify(root: Path, *, dry_run: bool) -> dict[str, object]:
@@ -840,13 +963,13 @@ def verify(root: Path, *, dry_run: bool) -> dict[str, object]:
         return {"verified": False, "reason": "dry run — nothing was installed, nothing was checked"}
 
     config = root / "config" / "nephesh.env"
-    venv_python = root / "runtime" / "venv" / "bin" / "python"
+    venv_python = venv_python_path(root)
     checks: dict[str, object] = {
         "verified": True,
         "user": getpass.getuser(),
         "root": str(root),
         "root_exists": root.exists(),
-        "current_release": (root / "current").is_symlink() and (root / "current").exists(),
+        "current_release": _current_release(root) is not None,
         "config_present": config.exists(),
         "runtime_present": venv_python.exists(),
         "data_dir": (root / "data").is_dir(),
@@ -877,17 +1000,56 @@ def verify(root: Path, *, dry_run: bool) -> dict[str, object]:
     return checks
 
 
+def _current_release(root: Path) -> Path | None:
+    try:
+        if os.name == "nt":
+            return windows_runtime.resolve_current(root)
+        current = root / "current"
+        return current.resolve() if current.is_symlink() and current.exists() else None
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _service_action(*, agent: str, component: str, action: str, dry_run: bool) -> None:
+    if os.name == "nt":
+        if dry_run:
+            print(f"would {action} Windows task {windows_runtime.task_name(agent, component)}")
+        else:
+            windows_runtime.lifecycle(agent=agent, component=component, action=action)
+    else:
+        command = "restart" if action == "restart" else action
+        run(["systemctl", "--user", command, f"nephesh{'-daemon' if component == 'daemon' else ''}.service"], dry_run=dry_run)
+
+
 def with_lock(root: Path, *, dry_run: bool):
     if dry_run:
         return None
     root.mkdir(parents=True, exist_ok=True)
     handle = (root / ".installer.lock").open("w")
     try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError as exc:
+        if os.name == "nt":
+            handle.write("0")
+            handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError) as exc:
         handle.close()
         raise InstallerError(f"another installer is operating on {root}") from exc
     return handle
+
+
+def release_lock(handle) -> None:
+    if os.name == "nt":
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        finally:
+            handle.close()
+    else:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
 
 
 def parse_args() -> argparse.Namespace:
@@ -920,7 +1082,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="stage and verify without installing or managing a user service",
     )
-    parser.add_argument("--apt", action="store_true", help="explicitly install missing Debian prerequisites with sudo apt")
+    parser.add_argument("--apt", action="store_true", help="explicitly install missing Debian/Ubuntu prerequisites with sudo apt")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--keep-releases", type=int, default=2)
     return parser.parse_args()
@@ -929,7 +1091,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
-        require_debian13()
+        require_supported_platform()
         check_prerequisites(
             allow_apt=args.apt,
             require_user_systemd=args.enable or args.start or args.restart,
@@ -940,6 +1102,7 @@ def main() -> int:
         source = args.source.expanduser().resolve()
         if not source.exists():
             raise InstallerError(f"source path does not exist: {source}")
+        source_info = source_identity(source)
         existing_manifest = load_manifest(root)
         if existing_manifest and args.agent and existing_manifest.get("agent") not in (None, args.agent):
             raise InstallerError(
@@ -982,7 +1145,7 @@ def main() -> int:
                 previous = Path(str(previous_value)) if previous_value else None
                 if previous is not None and not previous.exists():
                     raise InstallerError(f"previous release is missing: {previous}")
-                current = (root / "current").resolve() if (root / "current").exists() else None
+                current = _current_release(root)
                 if previous is not None:
                     switch_current(root, previous, dry_run=args.dry_run)
 
@@ -998,12 +1161,28 @@ def main() -> int:
                         print(f"would restore user unit {previous_unit} -> {unit}")
                     else:
                         shutil.copy2(previous_unit, unit)
+                previous_daemon_value = existing_manifest.get("previous_daemon_unit")
+                previous_daemon = Path(str(previous_daemon_value)) if previous_daemon_value else None
+                daemon_unit = Path(str(existing_manifest["daemon_unit"])) if existing_manifest.get("daemon_unit") else None
+                if previous_daemon is not None:
+                    if not previous_daemon.exists() or daemon_unit is None:
+                        raise InstallerError("previous daemon task/unit is missing from the rollback manifest")
+                    if args.dry_run:
+                        print(f"would restore daemon unit {previous_daemon} -> {daemon_unit}")
+                    else:
+                        shutil.copy2(previous_daemon, daemon_unit)
+                if os.name == "nt" and not args.dry_run:
+                    if unit is not None:
+                        windows_runtime.register(name=windows_runtime.task_name(args.agent, "server"), xml_path=unit)
+                        windows_runtime.query(name=windows_runtime.task_name(args.agent, "server"))
+                    if daemon_unit is not None:
+                        windows_runtime.register(name=windows_runtime.task_name(args.agent, "daemon"), xml_path=daemon_unit)
+                        windows_runtime.query(name=windows_runtime.task_name(args.agent, "daemon"))
 
                 if args.restart:
-                    run(["systemctl", "--user", "daemon-reload"], dry_run=args.dry_run)
-                    run(["systemctl", "--user", "restart", UNIT_NAME], dry_run=args.dry_run)
+                    _service_action(agent=args.agent, component="server", action="restart", dry_run=args.dry_run)
                     if existing_manifest.get("daemon_unit"):
-                        run(["systemctl", "--user", "restart", DAEMON_UNIT_NAME], dry_run=args.dry_run)
+                        _service_action(agent=args.agent, component="daemon", action="restart", dry_run=args.dry_run)
 
                 existing_manifest["release"] = str(previous) if previous is not None else existing_manifest.get("release")
                 existing_manifest["previous_release"] = str(current) if current else None
@@ -1019,7 +1198,7 @@ def main() -> int:
                     key=lambda p: p.stat().st_mtime,
                     reverse=True,
                 )
-                current_target = (root / "current").resolve() if (root / "current").exists() else None
+                current_target = _current_release(root)
                 retained = {current_target, *releases[:args.keep_releases]}
                 for release in releases:
                     if release not in retained:
@@ -1031,7 +1210,7 @@ def main() -> int:
             ensure_layout(root, dry_run=args.dry_run)
             ollama_binary = None
             ollama_unit = None
-            if not args.no_ollama and not args.no_service:
+            if not args.no_ollama and not args.no_service and os.name != "nt":
                 ollama_binary = ensure_ollama_binary(allow_install=True, dry_run=args.dry_run)
                 ollama_unit = install_ollama_unit(
                     root,
@@ -1044,8 +1223,8 @@ def main() -> int:
                 )
             backup = backup_existing(root, root / "backups", dry_run=args.dry_run)
             previous_release = (
-                str((root / "current").resolve())
-                if (root / "current").exists() and not args.dry_run
+                str(_current_release(root))
+                if _current_release(root) is not None and not args.dry_run
                 else (str(existing_manifest.get("release")) if existing_manifest else None)
             )
             if args.migrate:
@@ -1087,6 +1266,7 @@ def main() -> int:
             if not args.no_service:
                 unit = install_unit(
                     root,
+                    agent_name=args.agent,
                     unit_dir=args.unit_dir.expanduser().resolve() if args.unit_dir else None,
                     dry_run=args.dry_run,
                 )
@@ -1095,6 +1275,7 @@ def main() -> int:
                     previous_unit = candidate
                 daemon_unit = install_daemon_unit(
                     root,
+                    agent_name=args.agent,
                     unit_dir=args.unit_dir.expanduser().resolve() if args.unit_dir else None,
                     dry_run=args.dry_run,
                 )
@@ -1120,6 +1301,7 @@ def main() -> int:
                 "user": getpass.getuser(),
                 "root": str(root),
                 "source": str(source),
+                "source_identity": source_info,
                 "release": str(release),
                 "previous_release": previous_release,
                 "backup": str(backup) if backup else None,
@@ -1144,21 +1326,23 @@ def main() -> int:
             }
             write_json(root / "state" / MANIFEST_NAME, manifest, dry_run=args.dry_run)
             if args.enable:
-                run(["systemctl", "--user", "daemon-reload"], dry_run=args.dry_run)
-                run(["systemctl", "--user", "enable", UNIT_NAME], dry_run=args.dry_run)
+                if os.name != "nt":
+                    run(["systemctl", "--user", "daemon-reload"], dry_run=args.dry_run)
+                _service_action(agent=args.agent, component="server", action="enable", dry_run=args.dry_run)
                 if daemon_unit:
-                    run(["systemctl", "--user", "enable", DAEMON_UNIT_NAME], dry_run=args.dry_run)
+                    _service_action(agent=args.agent, component="daemon", action="enable", dry_run=args.dry_run)
             if args.start or args.restart:
-                run(["systemctl", "--user", "daemon-reload"], dry_run=args.dry_run)
-                run(["systemctl", "--user", "restart" if args.restart else "start", UNIT_NAME], dry_run=args.dry_run)
+                if os.name != "nt":
+                    run(["systemctl", "--user", "daemon-reload"], dry_run=args.dry_run)
+                action = "restart" if args.restart else "start"
+                _service_action(agent=args.agent, component="server", action=action, dry_run=args.dry_run)
                 if daemon_unit:
-                    run(["systemctl", "--user", "restart" if args.restart else "start", DAEMON_UNIT_NAME], dry_run=args.dry_run)
+                    _service_action(agent=args.agent, component="daemon", action=action, dry_run=args.dry_run)
             print(json.dumps({"status": "ok", "manifest": str(root / "state" / MANIFEST_NAME), "checks": checks}, indent=2))
             return 0
         finally:
             if lock is not None:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-                lock.close()
+                release_lock(lock)
     except (InstallerError, OSError, subprocess.CalledProcessError) as exc:
         print(f"installer: error: {exc}", file=sys.stderr)
         return 2

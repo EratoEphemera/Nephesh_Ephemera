@@ -8,7 +8,9 @@ import json
 import os
 import socket
 from pathlib import Path
+from unittest.mock import patch
 
+import scripts.nephesh_installer as installer
 from scripts.nephesh_installer import (
     backup_existing,
     agent_name_from_kernel,
@@ -31,6 +33,10 @@ from scripts.nephesh_installer import (
     daemon_unit_text,
     validate_agent_name,
     validate_service_options,
+    _read_os_release,
+    _version_tuple,
+    active_source_root,
+    source_identity,
 )
 
 
@@ -43,8 +49,38 @@ def _can_bind(sock: socket.socket, port: int) -> bool:
 
 
 class InstallerUnitTests(unittest.TestCase):
+    def test_supported_platform_parser_accepts_ubuntu_24_04(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            release = Path(directory) / "os-release"
+            release.write_text("ID=ubuntu\nVERSION_ID=24.04\nPRETTY_NAME=Ubuntu 24.04 LTS\n")
+            self.assertEqual(_read_os_release(release)["ID"], "ubuntu")
+            self.assertEqual(_version_tuple("24.04"), (24, 4))
+
+    def test_supported_platform_gate_accepts_ubuntu_without_requiring_debian(self) -> None:
+        with patch.object(installer, "platform") as platform_mock, patch.object(
+            installer, "_read_os_release", return_value={"ID": "ubuntu", "VERSION_ID": "24.04"}
+        ), patch.object(installer.os, "geteuid", return_value=1000):
+            platform_mock.system.return_value = "Linux"
+            installer.require_supported_linux()
+
+    def test_supported_platform_gate_rejects_ubuntu_22_04(self) -> None:
+        with patch.object(installer, "platform") as platform_mock, patch.object(
+            installer, "_read_os_release", return_value={"ID": "ubuntu", "VERSION_ID": "22.04", "PRETTY_NAME": "Ubuntu 22.04 LTS"}
+        ), patch.object(installer.os, "geteuid", return_value=1000):
+            platform_mock.system.return_value = "Linux"
+            with self.assertRaises(Exception):
+                installer.require_supported_linux()
+
     def test_source_version_is_read_from_the_release_source(self) -> None:
-        self.assertEqual(source_version(Path.cwd()), "5.3.0")
+        self.assertEqual(source_version(Path.cwd()), "5.3.1")
+
+    def test_source_identity_requires_the_active_upstream_repository(self) -> None:
+        identity = source_identity(active_source_root())
+        self.assertEqual(Path(str(identity["path"])), active_source_root())
+        self.assertTrue(identity["git_commit"])
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(Exception):
+                source_identity(Path(directory))
 
     def test_agent_names_are_safe(self) -> None:
         self.assertEqual(validate_agent_name("Thalia"), "Thalia")

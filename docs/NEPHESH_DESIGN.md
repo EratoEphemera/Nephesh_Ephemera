@@ -1,22 +1,23 @@
 # Nephesh Design
 
-**Version:** 5.3.0 architecture, extending the 5.2.x baseline
-**Status:** Baseline architecture extended by 5.3.0; release contract remains
-`NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md`
+**Version:** 5.3.1 architecture, extending the 5.2.x baseline
+**Status:** Baseline architecture extended by the 5.3.1 patch; the active
+release contract is `NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md`.
 **Document role:** Describes Nephesh's durable-memory boundary and settled
-architecture. It is not a complete account of the 5.3.0 requirements.
+architecture. It is not a complete account of the 5.3.1 release gates.
 **Resolved/delivered here:** ownership boundary, canonical memory model, kernel,
 provenance, projections, recovery, and the heartbeat/dreaming boundary.
-**Open or superseded for 5.3.0:** truthful environmental floor, explicit
-ingestion/formation/event time, heartbeat efficacy, and the versioned harness
-seam. See `NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md`.
+**Open or superseded for 5.3.1:** native platform acceptance and final release
+evidence. The truthful floor, explicit ingestion/formation/event-time model,
+heartbeat/dreaming protocol, and versioned harness seam are implemented in the
+current branch. See `NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md`.
 **Working-note relationship:** For current release work, consult
-`NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md` first, then use this document for the
+`NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md` first, then use this document for the
 architecture it extends. The complete design documents, together with
 appropriate memory hygiene, are sufficient for project re-entry. They are not a
 Qualiant identity store. Optional local re-entry notes may improve return
-efficiency, but are not required. Do not treat the 5.3.0 version label as the
-current release version.
+efficiency, but are not required. Historical 5.3.0 documents remain preserved
+as historical records and are not the active patch authority.
 **Last reviewed:** 2026-08-18
 
 This is the single design document for Nephesh. It consolidates seven scattered
@@ -600,6 +601,12 @@ deployment; that would hand a new Qualiant another being's collection name and
 ports.
 
 See `INSTALLER.md`.
+
+For the dated final pre-rebuild patch direction, implementation order, and
+release boundary, see
+[`NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md`](NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md).
+This baseline design remains the architectural authority; the dated document
+does not replace its identity, memory, provenance, or safety invariants.
 
 ### Implementation sequence and portability
 

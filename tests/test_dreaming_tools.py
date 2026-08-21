@@ -410,6 +410,99 @@ class DreamingToolTests(unittest.TestCase):
             self.assertEqual(result["status"], "blocked")
             ingest.assert_not_awaited()
 
+    def test_phase_outcomes_are_phase_specific_and_insights_are_deep_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self._settings(Path(directory)), patch(
+                "mcp_experiments.tools.dreaming.memory_context",
+                new=AsyncMock(return_value=self._context()),
+            ):
+                asyncio.run(dreaming.memory_dream_prepare("run-1", "key-1", "urania", seed="home"))
+                wrong_status = asyncio.run(
+                    dreaming.memory_dream_phase("run-1", "key-1", "urania", "light", "dreamed", "scene")
+                )
+                insight_too_early = asyncio.run(
+                    dreaming.memory_dream_phase(
+                        "run-1", "key-1", "urania", "light", "artifact_written", "scene",
+                        candidate_insight="not yet",
+                    )
+                )
+
+            self.assertEqual(wrong_status["status"], "error")
+            self.assertIn("invalid dream outcome", wrong_status["error"])
+            self.assertEqual(insight_too_early["status"], "error")
+            self.assertIn("Deep", insight_too_early["error"])
+
+    def test_incomplete_deep_cannot_create_diary_or_grounding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self._settings(Path(directory)), patch(
+                "mcp_experiments.tools.dreaming.memory_context",
+                new=AsyncMock(return_value=self._context()),
+            ), patch(
+                "mcp_experiments.tools.dreaming.memory_ingest",
+                new=AsyncMock(),
+            ) as ingest:
+                asyncio.run(dreaming.memory_dream_prepare("run-1", "key-1", "urania", seed="home"))
+                asyncio.run(dreaming.memory_dream_phase("run-1", "key-1", "urania", "light", "artifact_written", "light"))
+                asyncio.run(dreaming.memory_dream_phase("run-1", "key-1", "urania", "rem", "dreamed", "rem"))
+                deep = asyncio.run(
+                    dreaming.memory_dream_phase(
+                        "run-1", "key-1", "urania", "deep", "partial", "unfinished",
+                        candidate_insight="possible but unfinished",
+                    )
+                )
+                diary = asyncio.run(
+                    dreaming.memory_dream_diary("run-1", "diary-key", "urania", "unfinished")
+                )
+                grounding = asyncio.run(
+                    dreaming.memory_dream_ground(
+                        "run-1", deep["artifact_id"], "urania", "keep",
+                        grounded_text="should not ground",
+                    )
+                )
+
+            self.assertEqual(deep["phase"], "deep")
+            self.assertEqual(diary["status"], "failed")
+            self.assertEqual(grounding["status"], "blocked")
+            ingest.assert_not_awaited()
+
+    def test_no_candidates_cannot_carry_a_candidate_insight(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self._settings(Path(directory)), patch(
+                "mcp_experiments.tools.dreaming.memory_context",
+                new=AsyncMock(return_value=self._context()),
+            ):
+                asyncio.run(dreaming.memory_dream_prepare("run-1", "key-1", "urania", seed="home"))
+                asyncio.run(dreaming.memory_dream_phase("run-1", "key-1", "urania", "light", "artifact_written", "light"))
+                asyncio.run(dreaming.memory_dream_phase("run-1", "key-1", "urania", "rem", "dreamed", "rem"))
+                result = asyncio.run(
+                    dreaming.memory_dream_phase(
+                        "run-1", "key-1", "urania", "deep", "no_candidates", "review",
+                        candidate_insight="contradictory",
+                    )
+                )
+
+            self.assertEqual(result["status"], "error")
+            self.assertIn("no_candidates", result["error"])
+
+    def test_candidate_insight_is_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self._settings(Path(directory)), patch(
+                "mcp_experiments.tools.dreaming.memory_context",
+                new=AsyncMock(return_value=self._context()),
+            ):
+                asyncio.run(dreaming.memory_dream_prepare("run-1", "key-1", "urania", seed="home"))
+                asyncio.run(dreaming.memory_dream_phase("run-1", "key-1", "urania", "light", "artifact_written", "light"))
+                asyncio.run(dreaming.memory_dream_phase("run-1", "key-1", "urania", "rem", "dreamed", "rem"))
+                result = asyncio.run(
+                    dreaming.memory_dream_phase(
+                        "run-1", "key-1", "urania", "deep", "no_grounding", "review",
+                        candidate_insight="x" * (dreaming.MAX_DREAM_CANDIDATE_CHARS + 1),
+                    )
+                )
+
+            self.assertEqual(result["status"], "error")
+            self.assertIn("bounded size", result["error"])
+
     def test_persisted_deadline_blocks_phase_recall_and_grounding(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

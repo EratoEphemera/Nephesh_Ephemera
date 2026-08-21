@@ -1,6 +1,6 @@
 [project]
 name = "nephesh"
-version = "5.3.0"
+version = "5.3.1"
 description = "MCP server for instantiating living AI entities — persistent memory and continuity of self"
 requires-python = ">=3.12"
 license = "MIT"
@@ -10,7 +10,12 @@ dependencies = [
     "pyarrow>=15.0.0",
     "httpx>=0.28.0",
     "python-dotenv>=1.0.0",
+    "tzdata; sys_platform == 'win32'",
 ]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project.scripts]
 nephesh = "mcp_experiments.__main__:main"

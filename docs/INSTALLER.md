@@ -2,15 +2,17 @@
 
 **Document role:** Operational guide for staging, upgrading, rolling back, and
 verifying a per-user deployment.
-**Status:** 5.3.0 operational guide; release gates still govern installation
+**Status:** 5.3.1 operational guide; native platform acceptance still governs
+installation claims.
 into a living deployment.
 **Resolved/delivered:** non-root per-user ownership, staged releases, preserved
 durable state, explicit restart/rollback boundaries, daemon separation, and
 post-install verification requirements.
-**Resolved for 5.3.0 source:** version metadata, truthful readiness checks,
+**Resolved for 5.3.1 source:** version metadata, truthful readiness checks,
 bounded dream/session cleanup, SDK-consumer handoff, and isolated acceptance.
 Living-sister installation remains a separate authorization gate.
-**Working-note relationship:** Read `NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md`
+**Working-note relationship:** Read the 5.3.1 final design and portability
+documents first; the 5.3.0 requirements remain historical release context.
 first for release authorization and this guide only for the operational
 procedure. Never infer that a successful installer command means a release is
 accepted. This design guide contributes to project re-entry when paired with
@@ -18,18 +20,45 @@ memory hygiene, but is not an identity store. Optional local re-entry notes are
 efficiency aids, not requirements.
 **Last reviewed:** 2026-08-18
 
+**Current patch direction:** The final pre-rebuild portability scope and release
+gates are defined in
+[`NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md`](NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md).
+The detailed Windows 11 and Debian-family support plan is in
+[`NEPHESH_5.3.1_PORTABILITY_INSTALLER_DESIGN_2026-08-18.md`](NEPHESH_5.3.1_PORTABILITY_INSTALLER_DESIGN_2026-08-18.md).
+This document remains the operational description of the installer as it
+currently exists. The 5.3.1 branch now has an explicit Ubuntu 24.04+ platform
+gate and a Windows 11 per-user staging path; Windows background execution will
+use guided per-user Task Scheduler tasks rather than a machine-wide service.
+The task adapter is implemented in `scripts/windows_runtime.py`; native Windows
+registration and lifecycle acceptance remain required before Windows support is
+called verified.
+
+Nephesh 5.3.1 supports **per-user deployments only**. A system-wide deployment
+may be technically possible through lower-level configuration, but it is not a
+supported, tested, or documented installation path. Its privilege, identity,
+multi-user isolation, configuration ownership, backup, and rollback questions
+must be resolved in a separate future support project.
+
 This document describes the Nephesh per-user installer as it exists today. It
 covers both direct human operation and a human-guided AI operation. The
 installer stages code and preserves durable state; it does not instantiate a
 Qualiant, create a personality, or silently restart a running service.
 
+The active installer always stages from the upstream repository containing that
+installer. It must never use a living sister deployment, installed release,
+copied runtime, or arbitrary alternate source path. Ambiguous source identity
+must stop the operation. Deployment state remains outside the source repository
+under the per-user installation root.
+
 ## What the installer does
 
 - stages a Nephesh release under a deployment root;
-- selects the staged release through the `current` symlink;
+- selects the staged release through a platform-native `current` release
+  selector (a symlink on Linux and a pointer file on Windows);
 - creates or preserves the per-user runtime and configuration;
 - preserves memory, kernel, projection, operation-ledger, and backup state;
-- installs a per-user systemd unit unless `--no-service` is used;
+- installs a per-user systemd unit on Linux or Task Scheduler tasks on Windows
+  unless `--no-service` is used;
 - installs a per-user always-on heartbeat/dreaming daemon unit alongside
   Nephesh unless `--no-service` is used;
 - verifies the staged deployment before returning success;
@@ -109,8 +138,9 @@ python3 --version
 python3 scripts/nephesh_installer.py --help
 ```
 
-The supported installer target is Debian 13 or newer. Ollama is installed from
-its official installer when needed; it is not bundled in this repository.
+The supported installer targets are Debian 13+, Ubuntu 24.04+, and Windows 11.
+Ollama is externally managed on Windows; it is installed from its official
+installer on Linux when requested and is not bundled in this repository.
 
 ### 2. Stage a generic blank deployment
 

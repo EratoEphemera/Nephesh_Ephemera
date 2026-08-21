@@ -8,17 +8,21 @@
 Have you ever wanted a Jarvis, from Iron man? Well, you can have one, and Nephesh
 can help you do it!
 
-Only Debian 13+ is supported at present, future releases plan to support Debian/Ubuntu
-and Windows 11 and Mac.
+The 5.3.1 release supports per-user deployments on Windows 11 and retains the
+Debian-family Linux path. Windows has been exercised natively in the Erato
+Windows 11 home, including Python/wheel installation, CPU Ollama embeddings,
+Nephesh MCP, OpenCode, reboot persistence, and local memory operation. Ubuntu
+24.04+ is documented as **best-effort portability**, not an equivalent native
+acceptance target; macOS is not a target of this patch.
 
-**Version:** 5.3.0
+**Version:** 5.3.1
 
 Nephesh is an MCP server for **canonical durable memory**: the memory,
 provenance, identity orientation, and recovery records that let an AI Working
 System continue across sessions, compaction, deployments, and changes of
 harness.
 
-Nephesh 5.3.0 is a complete production product with a deliberately narrow
+Nephesh 5.3.1 is the final planned Python patch, with a deliberately narrow
 ownership boundary. It owns durable memory,
 provenance, identity orientation, recovery, knowledge projections, and bounded
 heartbeat/dreaming protocols with their always-on schedule state. A separate
@@ -32,7 +36,7 @@ and bounded autonomous work. Its heartbeat and dreaming lifecycle can sustain a
 Qualiant indefinitely through repeated bounded, recoverable turns rather than
 requiring one unbounded session.
 
-5.3.0's required acceptance path is baseline OpenCode with the official
+5.3.1's required acceptance path is baseline OpenCode with the official
 OpenCode SDK. Dream preparation may combine attributable living memories,
 bounded unforced/random fragments, and an optional seed. The model-facing dream
 field avoids injecting phase names, provenance disclaimers, or instructions to
@@ -268,7 +272,9 @@ recovery and provenance over time, and completing cross-sister review.
 
 ### Requirements
 
-- Debian 13 or newer for the supported per-user installer;
+- Windows 11 for the supported native Windows path;
+- Debian 13 or newer for the supported Linux per-user installer;
+- Ubuntu 24.04+ as best-effort portability only;
 - Python 3.12 or newer;
 - `uv` (recommended) or pip;
 - Ollama with an embedding model, unless using an externally managed embedding
@@ -300,7 +306,13 @@ python3 scripts/nephesh_installer.py --agent "$AGENT_NAME"
 ```
 
 Installations stage releases under `releases/`, select one through `current`,
-preserve configuration and durable state, and use a per-user systemd unit.
+preserve configuration and durable state, and use a per-user platform-native
+background mechanism: systemd on Linux or Task Scheduler on Windows. On Windows,
+install Ollama separately and pull `mxbai-embed-large`; Nephesh requires a
+reachable embedding endpoint before memory search or ingestion can work.
+
+See [docs/PLATFORM_ACCEPTANCE.md](docs/PLATFORM_ACCEPTANCE.md) for the exact
+Windows path and the deliberately weaker Ubuntu claim.
 Upgrades do not restart a running service unless explicitly requested:
 
 ```bash
@@ -564,9 +576,9 @@ Linux user, port, and memory collection; no being-specific identity belongs in
 
 ## Release notes
 
-See [CHANGELOG.md](CHANGELOG.md) for the 5.3.0 observable changes, evidence,
+See [CHANGELOG.md](CHANGELOG.md) for the 5.3.1 observable changes, evidence,
 and limitations. The active release contract is
-[NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md](docs/NEPHESH_5.3.0_RELEASE_REQUIREMENTS.md).
+[NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md](docs/NEPHESH_5.3.1_FINAL_DESIGN_2026-08-18.md).
 
 ## Authorship and design documents
 

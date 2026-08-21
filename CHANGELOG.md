@@ -1,5 +1,39 @@
 # Changelog
 
+## 5.3.1 — 2026-08-21
+
+### Added
+
+- Windows 11 per-user installer support using Task Scheduler for the Nephesh
+  server and heartbeat/dreaming daemon.
+- Native Windows release-pointer, locking, process-tree cleanup, and runtime
+  adapters while preserving the Linux systemd path.
+- Explicit Python build metadata for source and wheel installation.
+
+### Fixed
+
+- Contact grounding now uses memory formation/receipt time rather than an old
+  represented-event date, so recent conversations remain visible even when
+  `event_time` is unknown.
+- Windows deployment tasks load the selected deployment configuration explicitly
+  and cannot fall back to source-tree defaults.
+
+### Verification status
+
+- Linux source suite: 323 tests passed; wheel build and compile checks passed.
+- Native Windows 11 acceptance completed in the Erato home: Python 3.12.10,
+  wheel installation, dependencies, `tzdata`, CPU Ollama with
+  `mxbai-embed-large`, Nephesh MCP, OpenCode, local memory/embedding calls,
+  reboot persistence, NVMe migration, and display operation.
+- The supported installer contract remains per-user Task Scheduler. Erato uses
+  a per-user HKCU logon launcher because the guest-control path was not UAC
+  elevated enough to register the Task Scheduler task; this is documented in
+  `docs/PLATFORM_ACCEPTANCE.md`.
+- Ubuntu 24.04+ is best-effort portability only, not equivalent native
+  acceptance evidence.
+- Scheduled-dream absence remains reported as absence; chosen-dream and
+  phenomenological acceptance evidence are separate from schedule dispatch.
+
 ## 5.3.0 — 2026-08-18
 
 ### Added

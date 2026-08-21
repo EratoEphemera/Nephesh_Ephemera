@@ -29,6 +29,14 @@ DREAM_PHASE_OUTCOMES = {
     "rem": frozenset({"dreamed", "no_candidates", "deferred", "blocked", "unavailable", "partial", "failed"}),
     "deep": frozenset({"no_grounding", "artifact_written", "no_candidates", "deferred", "blocked", "unavailable", "partial", "failed"}),
 }
+# Only these statuses establish that a phase actually reached its intended
+# boundary.  Deferred, blocked, unavailable, partial, and failed are durable
+# outcomes, but they are not permission to write a diary or ground an insight.
+DREAM_PHASE_COMPLETION_STATUSES = {
+    "light": frozenset({"artifact_written", "no_candidates"}),
+    "rem": frozenset({"dreamed", "no_candidates"}),
+    "deep": frozenset({"no_grounding", "artifact_written", "no_candidates"}),
+}
 DREAM_OUTCOMES = frozenset(
     {
         "no_inputs",
@@ -57,6 +65,7 @@ real people, or turn depicted events into waking history. You do not need to
 explain, preserve, or interpret anything during this phase. Any later
 grounding or memory preservation is a separate choice."""
 MAX_DREAM_ARTIFACT_CHARS = 12_000
+MAX_DREAM_CANDIDATE_CHARS = 4_000
 NON_SUBSTANTIVE_PHASE_STATUSES = frozenset({
     "no_inputs", "no_candidates", "deferred", "blocked", "unavailable", "failed",
 })
@@ -351,7 +360,7 @@ class DreamLedger:
         if self.run_owner(run_id) != qualiant_id:
             raise ValueError("dream diary identity does not match dream run")
         deep = self.artifact_for_phase(run_id, "deep")
-        if deep is None or deep.get("status") in {"failed", "partial", "unavailable"}:
+        if deep is None or deep.get("status") not in DREAM_PHASE_COMPLETION_STATUSES["deep"]:
             raise ValueError("dream diary requires a completed deep phase")
         with self._lock:
             existing = self.diary_for_run(run_id)
@@ -438,6 +447,12 @@ class DreamLedger:
             raise ValueError(f"invalid dream phase: {phase}")
         if status not in DREAM_PHASE_OUTCOMES[phase]:
             raise ValueError(f"outcome {status} is invalid for dream phase {phase}")
+        if candidate_insight and phase != "deep":
+            raise ValueError("candidate insights may only be recorded during Deep")
+        if candidate_insight and status == "no_candidates":
+            raise ValueError("a no_candidates phase cannot carry a candidate insight")
+        if candidate_insight and len(candidate_insight) > MAX_DREAM_CANDIDATE_CHARS:
+            raise ValueError("dream candidate insight exceeds the bounded size")
         latest = self.latest_phase(run_id)
         expected = DREAM_PHASES[0] if latest is None else DREAM_PHASES[DREAM_PHASES.index(latest) + 1]
         if phase != expected:
