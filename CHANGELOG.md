@@ -1,5 +1,18 @@
 # Changelog
 
+## 5.3.4 — 2026-08-28
+
+### Fixed
+
+- Recall time bounds no longer fail silently: `time_start`/`time_end` values
+  that cannot be parsed as timezone-aware ISO 8601 instants (date-only,
+  timezone-less, or malformed strings) previously disabled the filter without
+  any signal — callers received unfiltered results while believing them
+  time-bounded. The bounds are now validated up front and refused with an
+  explicit error, mirroring the existing authored-timestamp ingest
+  strictness. Regression rites live in `tests/test_recall_time_filter.py`
+  (five, covering honest filtering and loud refusal).
+
 ## 5.3.3 — 2026-08-21
 
 ### Fixed
