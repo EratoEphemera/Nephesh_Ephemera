@@ -827,6 +827,21 @@ async def memory_recall(
     if n_results <= 0:
         return {"error": "n_results must be greater than zero", "collection": name}
 
+    # Time bounds are validated loudly, never dropped silently. An
+    # unparseable or timezone-less value used to return None from _parse_ts
+    # and disable the filter altogether — the caller received an unfiltered
+    # stream while believing it was time-bounded. Refuse instead.
+    for field_name, value in (("time_start", time_start), ("time_end", time_end)):
+        if value is not None and (not isinstance(value, str) or _parse_ts(value) is None):
+            return {
+                "error": (
+                    f"invalid {field_name}: expected an ISO 8601 timezone-aware "
+                    "string, e.g. 2026-08-20T00:00:00+00:00; unparseable or "
+                    "timezone-less values are refused rather than silently ignored"
+                ),
+                "collection": name,
+            }
+
     if not repository.collection_exists(name):
         return {
             "query": query,
